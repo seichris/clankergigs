@@ -13,6 +13,7 @@
     "prisma:studio": "prisma studio"
   },
   "dependencies": {
+    "@fastify/cors": "^10.0.1",
     "@prisma/client": "^6.2.1",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
@@ -26,4 +27,3 @@
     "typescript": "^5.7.3"
   }
 }
-

@@ -216,8 +216,10 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const amountWei = (log.args.amount as bigint).toString();
       const lockedUntil = Number(log.args.lockedUntil as bigint);
 
-      await prisma.funding.create({
-        data: { bountyId, token, funder, amountWei, lockedUntil, txHash, logIndex, blockNumber }
+      await prisma.funding.upsert({
+        where: { txHash_logIndex: { txHash, logIndex } },
+        create: { bountyId, token, funder, amountWei, lockedUntil, txHash, logIndex, blockNumber },
+        update: { bountyId, token, funder, amountWei, lockedUntil, blockNumber }
       });
 
       await bumpAssetTotals(prisma, bountyId, token, { funded: BigInt(amountWei), escrowed: BigInt(amountWei) });
@@ -260,8 +262,10 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const claimer = (log.args.claimer as string).toLowerCase();
       const metadataURI = (log.args.metadataURI as string) || "";
 
-      await prisma.claim.create({
-        data: { bountyId, claimId, claimer, metadataURI, txHash, logIndex, blockNumber }
+      await prisma.claim.upsert({
+        where: { txHash_logIndex: { txHash, logIndex } },
+        create: { bountyId, claimId, claimer, metadataURI, txHash, logIndex, blockNumber },
+        update: { bountyId, claimId, claimer, metadataURI, blockNumber }
       });
       break;
     }
@@ -284,8 +288,10 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const recipient = (log.args.recipient as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
 
-      await prisma.payout.create({
-        data: { bountyId, token, recipient, amountWei, txHash, logIndex, blockNumber }
+      await prisma.payout.upsert({
+        where: { txHash_logIndex: { txHash, logIndex } },
+        create: { bountyId, token, recipient, amountWei, txHash, logIndex, blockNumber },
+        update: { bountyId, token, recipient, amountWei, blockNumber }
       });
 
       await bumpAssetTotals(prisma, bountyId, token, { paid: BigInt(amountWei), escrowed: -BigInt(amountWei) });
@@ -297,8 +303,10 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const funder = (log.args.funder as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
 
-      await prisma.refund.create({
-        data: { bountyId, token, funder, amountWei, txHash, logIndex, blockNumber }
+      await prisma.refund.upsert({
+        where: { txHash_logIndex: { txHash, logIndex } },
+        create: { bountyId, token, funder, amountWei, txHash, logIndex, blockNumber },
+        update: { bountyId, token, funder, amountWei, blockNumber }
       });
 
       await bumpAssetTotals(prisma, bountyId, token, { escrowed: -BigInt(amountWei) });

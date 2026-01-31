@@ -32,3 +32,6 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
 - GitHub App integration is WIP. The API now:
   - verifies incoming webhooks at `/github/webhook`
   - can auto-apply bounty labels and post funding comments when it sees on-chain events (requires GitHub App env vars or a `GITHUB_TOKEN` PAT; app creds take precedence)
+
+## Roadmap
+- Version B) Authorize payouts via GitHub auth + backend signer (EIP-712), no repo registration required.
