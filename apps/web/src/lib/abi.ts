@@ -11,6 +11,7 @@ export const ghBountiesAbi = parseAbi([
   "function fundBountyETH(bytes32 bountyId, uint64 lockDurationSeconds) payable",
   "function fundBountyToken(bytes32 bountyId, address token, uint256 amount, uint64 lockDurationSeconds)",
   "function submitClaim(bytes32 bountyId, string claimMetadataURI) returns (uint256)",
+  "function submitClaimWithAuthorization(bytes32 bountyId, string claimMetadataURI, uint256 nonce, uint256 deadline, bytes signature) returns (uint256)",
   "function payout(bytes32 bountyId, address token, address recipient, uint256 amount)",
   "function payoutWithAuthorization(bytes32 bountyId, address token, address recipient, uint256 amount, uint256 nonce, uint256 deadline, bytes signature)",
   "function refund(bytes32 bountyId, address token, address funder, uint256 amount)",

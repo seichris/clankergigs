@@ -62,10 +62,13 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
 
 ## Notes
 - On-chain contract cannot index GitHub issues/PRs. The API will index contract events + fetch GitHub data off-chain.
+- GitHub OAuth login is stored in the API database and lasts 30 days (until expired or you log out). Run the Prisma migration before first use.
 - GitHub automation (labels/comments) is best-effort. The API now:
   - verifies incoming webhooks at `/github/webhook`
   - can auto-apply bounty labels and post issue comments when it sees on-chain events
     (default: `GITHUB_AUTH_MODE=pat` with a `GITHUB_TOKEN` PAT; switch to App mode with `GITHUB_AUTH_MODE=app`)
 
 ## Roadmap
+- Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures
 - Add DAO UI (contract supports DAO fallback payout/refund after a delay; the Safe can sign with its own UI).
+- Add a x.com account to tweet out all bounties

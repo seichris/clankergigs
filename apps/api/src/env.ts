@@ -28,10 +28,12 @@ const EnvSchema = z.object({
     .or(z.literal("")),
   DAO_DELAY_SECONDS: z.coerce.number().int().min(0).default(0),
   GITHUB_WEBHOOK_SECRET: z.string().optional().or(z.literal("")),
+  GITHUB_BACKFILL_SECRET: z.string().optional().or(z.literal("")),
   GITHUB_APP_ID: z.string().optional().or(z.literal("")),
   GITHUB_INSTALLATION_ID: z.string().optional().or(z.literal("")),
   GITHUB_PRIVATE_KEY_PEM: z.string().optional().or(z.literal("")),
   GITHUB_TOKEN: z.string().optional().or(z.literal("")),
+  GITHUB_BACKFILL_INTERVAL_MINUTES: z.coerce.number().int().min(0).default(60),
   GITHUB_AUTH_MODE: z
     .preprocess(
       (value) => (typeof value === "string" ? value.toLowerCase() : value),

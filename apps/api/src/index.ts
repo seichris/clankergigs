@@ -1,17 +1,29 @@
 import { loadEnv } from "./env.js";
 import { buildServer } from "./server.js";
 import { startIndexer } from "./indexer/indexer.js";
-import { createPublicClient, http, isAddress, parseAbi, type Address, type Hex } from "viem";
+import { createPublicClient, http, isAddress, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { parseGithubIssueUrl } from "./github/parse.js";
-import { getGithubAccessTokenFromRequest } from "./github/oauth.js";
+import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.js";
+import { getGithubAccessTokenFromRequest, getGithubUserFromRequest } from "./github/oauth.js";
+import { backfillLinkedPullRequests } from "./github/backfill.js";
+import { getPrisma } from "./db.js";
 
 async function main() {
   const env = loadEnv();
   // Prisma reads DATABASE_URL from process.env at construction time.
   process.env.DATABASE_URL ||= env.DATABASE_URL;
 
-  const app = await buildServer();
+  const githubMode = env.GITHUB_AUTH_MODE ?? "pat";
+  const github =
+    githubMode === "app"
+      ? env.GITHUB_APP_ID && env.GITHUB_INSTALLATION_ID && env.GITHUB_PRIVATE_KEY_PEM
+        ? { appId: env.GITHUB_APP_ID, installationId: env.GITHUB_INSTALLATION_ID, privateKeyPem: env.GITHUB_PRIVATE_KEY_PEM }
+        : null
+      : env.GITHUB_TOKEN && env.GITHUB_TOKEN.length > 0
+        ? { userToken: env.GITHUB_TOKEN }
+        : null;
+
+  const app = await buildServer({ github });
 
   // Payout authorization: verify GitHub admin and sign an EIP-712 authorization.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0 && env.BACKEND_SIGNER_PRIVATE_KEY && env.BACKEND_SIGNER_PRIVATE_KEY.length > 0) {
@@ -20,6 +32,7 @@ async function main() {
 
     const authAbi = parseAbi([
       "function payoutNonces(bytes32 bountyId) view returns (uint256)",
+      "function claimNonces(bytes32 bountyId, address claimer) view returns (uint256)",
       "function bounties(bytes32 bountyId) view returns (bytes32 repoHash, uint256 issueNumber, uint8 status, uint64 createdAt, string metadataURI)"
     ]);
 
@@ -180,6 +193,151 @@ async function main() {
       });
     });
 
+    app.post("/claim-auth", async (req, reply) => {
+      const githubToken = (await getGithubAccessTokenFromRequest(req)) || "";
+      const githubUser = await getGithubUserFromRequest(req);
+      if (!githubToken || !githubUser) {
+        return reply.code(401).send({ error: "Not logged in (use GitHub OAuth login)" });
+      }
+
+      const rawBody = req.body as any;
+      let body: any = rawBody;
+      if (typeof body === "string") {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          body = null;
+        }
+      }
+      if (body && typeof body === "object" && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+        try {
+          const text = Buffer.from(body).toString("utf8");
+          body = JSON.parse(text);
+        } catch {
+          req.log.warn(
+            {
+              contentType: req.headers["content-type"],
+              contentLength: req.headers["content-length"]
+            },
+            "Failed to parse JSON buffer body"
+          );
+          body = null;
+        }
+      }
+      if (!body || typeof body !== "object") {
+        return reply.code(400).send({ error: "Invalid JSON body" });
+      }
+
+      const bountyIdRaw = body?.bountyId as unknown;
+      const claimMetadataURI = typeof body?.claimMetadataURI === "string" ? body.claimMetadataURI.trim() : "";
+      const claimer = body?.claimer as Address | undefined;
+
+      let bountyIdStr = typeof bountyIdRaw === "string" ? bountyIdRaw.trim() : "";
+      if (/^[a-fA-F0-9]{64}$/.test(bountyIdStr)) bountyIdStr = `0x${bountyIdStr}`;
+      if (!/^0x[a-fA-F0-9]{64}$/.test(bountyIdStr)) {
+        req.log.warn({ received: bountyIdRaw, type: typeof bountyIdRaw }, "Invalid bountyId");
+        return reply.code(400).send({ error: "Invalid bountyId", received: bountyIdRaw ?? null });
+      }
+      const bountyId = bountyIdStr as Hex;
+      if (!claimer || !isAddress(claimer)) return reply.code(400).send({ error: "Invalid claimer address" });
+      if (!claimMetadataURI) return reply.code(400).send({ error: "Missing claimMetadataURI" });
+
+      const bounty = (await client.readContract({
+        address: env.CONTRACT_ADDRESS as Hex,
+        abi: authAbi,
+        functionName: "bounties",
+        args: [bountyId]
+      })) as readonly [Hex, bigint, number, bigint, string];
+
+      const createdAt = BigInt(bounty[3] ?? 0n);
+      const issueUrl = (bounty[4] ?? "").toString();
+      if (createdAt === 0n) return reply.code(404).send({ error: "Bounty not found on-chain" });
+
+      let owner: string;
+      let repo: string;
+      try {
+        const parsed = parseGithubIssueUrl(issueUrl);
+        owner = parsed.owner;
+        repo = parsed.repo;
+      } catch {
+        return reply.code(400).send({ error: `Bounty metadataURI is not a GitHub issue URL: ${issueUrl}` });
+      }
+
+      let prOwner: string;
+      let prRepo: string;
+      let pullNumber: number;
+      try {
+        const parsed = parseGithubPullRequestUrl(claimMetadataURI);
+        prOwner = parsed.owner;
+        prRepo = parsed.repo;
+        pullNumber = parsed.pullNumber;
+      } catch {
+        return reply.code(400).send({ error: "Invalid pull request URL" });
+      }
+
+      if (prOwner.toLowerCase() !== owner.toLowerCase() || prRepo.toLowerCase() !== repo.toLowerCase()) {
+        return reply.code(400).send({ error: "PR repo does not match bounty repo" });
+      }
+
+      const ghHeaders = {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "gh-bounties"
+      } as Record<string, string>;
+
+      let prRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, {
+        headers: { ...ghHeaders, Authorization: `Bearer ${githubToken}` }
+      });
+      if (prRes.status === 401) {
+        prRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`, {
+          headers: { ...ghHeaders, Authorization: `token ${githubToken}` }
+        });
+      }
+      if (!prRes.ok) {
+        const text = await prRes.text().catch(() => "");
+        return reply.code(403).send({ error: `GitHub API error (${prRes.status}): ${text || prRes.statusText}` });
+      }
+      const prData = (await prRes.json()) as any;
+      const prAuthor = prData?.user?.login;
+      if (!prAuthor || prAuthor.toLowerCase() !== githubUser.login.toLowerCase()) {
+        return reply.code(403).send({ error: `PR author is @${prAuthor ?? "unknown"}, not @${githubUser.login}` });
+      }
+
+      const nonce = (await client.readContract({
+        address: env.CONTRACT_ADDRESS as Hex,
+        abi: authAbi,
+        functionName: "claimNonces",
+        args: [bountyId, claimer]
+      })) as bigint;
+
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
+      const claimHash = keccak256(toBytes(claimMetadataURI));
+
+      const signature = await signer.signTypedData({
+        domain: { name: "GHBounties", version: "1", chainId: env.CHAIN_ID, verifyingContract: env.CONTRACT_ADDRESS as Hex },
+        types: {
+          Claim: [
+            { name: "bountyId", type: "bytes32" },
+            { name: "claimer", type: "address" },
+            { name: "claimHash", type: "bytes32" },
+            { name: "nonce", type: "uint256" },
+            { name: "deadline", type: "uint256" }
+          ]
+        },
+        primaryType: "Claim",
+        message: { bountyId, claimer, claimHash, nonce, deadline }
+      });
+
+      return reply.send({
+        issueUrl,
+        owner,
+        repo,
+        nonce: nonce.toString(),
+        deadline: deadline.toString(),
+        claimHash,
+        signature
+      });
+    });
+
     app.log.info({ signer: signer.address }, "payout auth enabled");
   } else {
     app.log.warn("payout auth disabled (missing CONTRACT_ADDRESS or BACKEND_SIGNER_PRIVATE_KEY)");
@@ -187,16 +345,6 @@ async function main() {
 
   // Indexer is optional while bootstrapping the UI, but usually you'll set CONTRACT_ADDRESS.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0) {
-    const githubMode = env.GITHUB_AUTH_MODE ?? "pat";
-    const github =
-      githubMode === "app"
-        ? env.GITHUB_APP_ID && env.GITHUB_INSTALLATION_ID && env.GITHUB_PRIVATE_KEY_PEM
-          ? { appId: env.GITHUB_APP_ID, installationId: env.GITHUB_INSTALLATION_ID, privateKeyPem: env.GITHUB_PRIVATE_KEY_PEM }
-          : null
-        : env.GITHUB_TOKEN && env.GITHUB_TOKEN.length > 0
-          ? { userToken: env.GITHUB_TOKEN }
-          : null;
-
     await startIndexer({
       rpcUrl: env.RPC_URL,
       chainId: env.CHAIN_ID,
@@ -206,6 +354,58 @@ async function main() {
     app.log.info({ contract: env.CONTRACT_ADDRESS, chainId: env.CHAIN_ID }, "indexer started");
   } else {
     app.log.warn("CONTRACT_ADDRESS is empty; indexer disabled");
+  }
+
+  if (env.GITHUB_BACKFILL_INTERVAL_MINUTES > 0) {
+    let backfillInFlight = false;
+    const intervalMs = env.GITHUB_BACKFILL_INTERVAL_MINUTES * 60 * 1000;
+    const prisma = getPrisma();
+
+    const runBackfill = async () => {
+      if (backfillInFlight) {
+        app.log.warn("skipping PR backfill; previous run still in flight");
+        return;
+      }
+      if (!github) {
+        app.log.warn("skipping PR backfill; GitHub auth not configured");
+        return;
+      }
+      backfillInFlight = true;
+      try {
+        const result = await backfillLinkedPullRequests({
+          prisma,
+          github,
+          logger: app.log
+        });
+        if (!result.ok) {
+          app.log.warn({ error: result.error }, "linked PR backfill failed");
+        } else {
+          app.log.info(
+            {
+              scanned: result.scanned,
+              created: result.created,
+              updated: result.updated,
+              skipped: result.skipped,
+              rateLimited: result.rateLimited
+            },
+            "linked PR backfill completed"
+          );
+        }
+      } catch (err: any) {
+        app.log.warn({ err: err?.message ?? String(err) }, "linked PR backfill crashed");
+      } finally {
+        backfillInFlight = false;
+      }
+    };
+
+    runBackfill().catch(() => {
+      // logged inside
+    });
+    setInterval(() => {
+      runBackfill().catch(() => {
+        // logged inside
+      });
+    }, intervalMs);
   }
 
   await app.listen({ port: env.PORT, host: "0.0.0.0" });

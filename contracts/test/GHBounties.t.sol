@@ -50,6 +50,21 @@ contract GHBountiesTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
+    function _signClaim(
+        bytes32 bountyId,
+        address claimer,
+        bytes32 claimHash,
+        uint256 nonce,
+        uint256 deadline
+    ) internal view returns (bytes memory sig) {
+        bytes32 typeHash =
+            keccak256("Claim(bytes32 bountyId,address claimer,bytes32 claimHash,uint256 nonce,uint256 deadline)");
+        bytes32 structHash = keccak256(abi.encode(typeHash, bountyId, claimer, claimHash, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", bounties.DOMAIN_SEPARATOR(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(payoutSignerKey, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
     function test_Flow_Fund_Claim_Payout() public {
         bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "ipfs://issue-metadata");
 
@@ -65,11 +80,17 @@ contract GHBountiesTest is Test {
         assertEq(funded, 3 ether);
         assertEq(paid, 0);
 
+        string memory prUrl = "https://github.com/commaai/openpilot/pull/999";
+        bytes32 claimHash = keccak256(bytes(prUrl));
+        uint256 claimNonce = bounties.claimNonces(bountyId, dev);
+        uint256 claimDeadline = block.timestamp + 1 days;
+        bytes memory claimSig = _signClaim(bountyId, dev, claimHash, claimNonce, claimDeadline);
+
         vm.prank(dev);
-        uint256 claimId = bounties.submitClaim(bountyId, "https://github.com/commaai/openpilot/pull/999");
+        uint256 claimId = bounties.submitClaimWithAuthorization(bountyId, prUrl, claimNonce, claimDeadline, claimSig);
         (address claimer,, string memory uri) = bounties.claims(bountyId, claimId);
         assertEq(claimer, dev);
-        assertEq(uri, "https://github.com/commaai/openpilot/pull/999");
+        assertEq(uri, prUrl);
 
         uint256 devBefore = dev.balance;
 
@@ -82,6 +103,21 @@ contract GHBountiesTest is Test {
         (esc, funded, paid) = bounties.getTotals(bountyId, address(0));
         assertEq(esc, 0);
         assertEq(paid, 3 ether);
+    }
+
+    function test_SubmitClaimWithAuthorization() public {
+        bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "ipfs://issue-metadata");
+        string memory prUrl = "https://github.com/commaai/openpilot/pull/123";
+        bytes32 claimHash = keccak256(bytes(prUrl));
+        uint256 nonce = bounties.claimNonces(bountyId, dev);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signClaim(bountyId, dev, claimHash, nonce, deadline);
+
+        vm.prank(dev);
+        uint256 claimId = bounties.submitClaimWithAuthorization(bountyId, prUrl, nonce, deadline, sig);
+        (address claimer,, string memory uri) = bounties.claims(bountyId, claimId);
+        assertEq(claimer, dev);
+        assertEq(uri, prUrl);
     }
 
     function test_WithdrawAfterTimeout_OnlyIfNoPayout() public {

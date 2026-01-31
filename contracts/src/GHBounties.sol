@@ -54,6 +54,7 @@ contract GHBounties {
     error InvalidSignature();
     error DaoNotAvailable();
     error PayoutModeLocked();
+    error ClaimAuthRequired();
 
     // ---- EIP-712 payout/refund auth (trusted backend signer) ----
     bytes32 private constant EIP712_DOMAIN_TYPEHASH =
@@ -65,6 +66,8 @@ contract GHBounties {
         keccak256("Payout(bytes32 bountyId,address token,address recipient,uint256 amount,uint256 nonce,uint256 deadline)");
     bytes32 private constant REFUND_TYPEHASH =
         keccak256("Refund(bytes32 bountyId,address token,address funder,uint256 amount,uint256 nonce,uint256 deadline)");
+    bytes32 private constant CLAIM_TYPEHASH =
+        keccak256("Claim(bytes32 bountyId,address claimer,bytes32 claimHash,uint256 nonce,uint256 deadline)");
 
     bytes32 public immutable DOMAIN_SEPARATOR;
     address public immutable payoutAuthorizer; // trusted backend signer
@@ -109,6 +112,7 @@ contract GHBounties {
 
     mapping(bytes32 bountyId => uint256) public payoutNonces;
     mapping(bytes32 bountyId => uint256) public refundNonces;
+    mapping(bytes32 bountyId => mapping(address claimer => uint256)) public claimNonces;
 
     uint64 public immutable defaultLockDuration; // seconds (e.g. 7 days)
 
@@ -219,8 +223,29 @@ contract GHBounties {
     // -------- Claims --------
 
     function submitClaim(bytes32 bountyId, string calldata claimMetadataURI) external returns (uint256 claimId) {
+        if (payoutAuthorizer != address(0)) revert ClaimAuthRequired();
         Bounty storage b = bounties[bountyId];
         if (b.createdAt == 0) revert BountyNotFound();
+
+        claimId = nextClaimIds[bountyId]++;
+        claims[bountyId][claimId] =
+            Claim({claimer: msg.sender, createdAt: uint64(block.timestamp), metadataURI: claimMetadataURI});
+        emit ClaimSubmitted(bountyId, claimId, msg.sender, claimMetadataURI);
+    }
+
+    function submitClaimWithAuthorization(
+        bytes32 bountyId,
+        string calldata claimMetadataURI,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature
+    ) external returns (uint256 claimId) {
+        Bounty storage b = bounties[bountyId];
+        if (b.createdAt == 0) revert BountyNotFound();
+
+        bytes32 claimHash = keccak256(bytes(claimMetadataURI));
+        _verifyClaimAuth(bountyId, msg.sender, claimHash, nonce, deadline, signature, payoutAuthorizer);
+        claimNonces[bountyId][msg.sender] = nonce + 1;
 
         claimId = nextClaimIds[bountyId]++;
         claims[bountyId][claimId] =
@@ -398,6 +423,25 @@ contract GHBounties {
         }
 
         bytes32 structHash = keccak256(abi.encode(typeHash, bountyId, token, party, amount, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        address recovered = _recoverSigner(digest, signature);
+        if (recovered != expectedSigner) revert InvalidSignature();
+    }
+
+    function _verifyClaimAuth(
+        bytes32 bountyId,
+        address claimer,
+        bytes32 claimHash,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature,
+        address expectedSigner
+    ) internal view {
+        if (block.timestamp > deadline) revert SignatureExpired();
+        if (expectedSigner == address(0)) revert Unauthorized();
+        if (nonce != claimNonces[bountyId][claimer]) revert InvalidNonce();
+
+        bytes32 structHash = keccak256(abi.encode(CLAIM_TYPEHASH, bountyId, claimer, claimHash, nonce, deadline));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
         address recovered = _recoverSigner(digest, signature);
         if (recovered != expectedSigner) revert InvalidSignature();
