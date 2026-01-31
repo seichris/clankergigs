@@ -1,7 +1,5 @@
-import { getInstallationToken } from "./appAuth.js";
+import { getGithubToken, type GithubAuthConfig } from "./appAuth.js";
 import { parseGithubIssueUrl } from "./parse.js";
-
-type GithubAppConfig = { appId: string; installationId: string; privateKeyPem: string };
 
 const STATE_LABELS = ["bounty - open", "bounty - implemented", "bounty - closed"] as const;
 
@@ -63,14 +61,15 @@ async function removeIssueLabel(token: string, owner: string, repo: string, issu
 }
 
 export async function syncBountyLabels(opts: {
-  github: GithubAppConfig | null;
+  github: GithubAuthConfig | null;
   issueUrl: string;
   status: "OPEN" | "IMPLEMENTED" | "CLOSED";
 }) {
   if (!opts.github) return;
+  const token = await getGithubToken(opts.github);
+  if (!token) return;
 
   const { owner, repo, issueNumber } = parseGithubIssueUrl(opts.issueUrl);
-  const token = await getInstallationToken(opts.github);
 
   const desiredState =
     opts.status === "OPEN" ? "bounty - open" : opts.status === "IMPLEMENTED" ? "bounty - implemented" : "bounty - closed";
@@ -88,4 +87,3 @@ export async function syncBountyLabels(opts: {
     await removeIssueLabel(token, owner, repo, issueNumber, l);
   }
 }
-

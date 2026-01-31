@@ -2,6 +2,13 @@ import crypto from "node:crypto";
 
 type InstallationToken = { token: string; expiresAt: number };
 
+export type GithubAuthConfig = {
+  appId?: string;
+  installationId?: string;
+  privateKeyPem?: string;
+  userToken?: string;
+};
+
 function base64UrlEncode(buf: Buffer): string {
   return buf
     .toString("base64")
@@ -65,3 +72,15 @@ export async function getInstallationToken(opts: {
   return json.token;
 }
 
+export async function getGithubToken(opts: GithubAuthConfig): Promise<string | null> {
+  const hasApp = Boolean(opts.appId && opts.installationId && opts.privateKeyPem);
+  if (hasApp) {
+    return getInstallationToken({
+      appId: opts.appId as string,
+      installationId: opts.installationId as string,
+      privateKeyPem: opts.privateKeyPem as string
+    });
+  }
+  if (opts.userToken && opts.userToken.trim().length > 0) return opts.userToken.trim();
+  return null;
+}

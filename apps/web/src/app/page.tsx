@@ -346,10 +346,16 @@ export default function Home() {
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6">
             <h2 className="text-lg font-semibold">Actions</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button className="rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950" onClick={registerRepo}>
+              <button
+                className="rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-white"
+                onClick={registerRepo}
+              >
                 Register repo (maintainer)
               </button>
-              <button className="rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950" onClick={createBounty}>
+              <button
+                className="rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-white"
+                onClick={createBounty}
+              >
                 Create bounty
               </button>
               <div className="sm:col-span-2 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
@@ -357,14 +363,22 @@ export default function Home() {
                   <div className="text-sm font-medium text-zinc-100">Funding asset</div>
                   <div className="flex items-center gap-2 text-sm">
                     <button
-                      className={`rounded-full px-3 py-1 ${asset === "ETH" ? "bg-zinc-100 text-zinc-950" : "bg-zinc-800 text-zinc-100"}`}
+                      className={`rounded-full px-3 py-1 ${
+                        asset === "ETH"
+                          ? "bg-zinc-100 text-zinc-950 hover:bg-white"
+                          : "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
+                      }`}
                       onClick={() => setAsset("ETH")}
                       type="button"
                     >
                       ETH
                     </button>
                     <button
-                      className={`rounded-full px-3 py-1 ${asset === "TOKEN" ? "bg-zinc-100 text-zinc-950" : "bg-zinc-800 text-zinc-100"}`}
+                      className={`rounded-full px-3 py-1 ${
+                        asset === "TOKEN"
+                          ? "bg-zinc-100 text-zinc-950 hover:bg-white"
+                          : "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
+                      }`}
                       onClick={() => setAsset("TOKEN")}
                       type="button"
                     >
@@ -399,7 +413,10 @@ export default function Home() {
                       placeholder="0.01"
                     />
                   </div>
-                  <button className="flex-1 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950" onClick={fundBounty}>
+                  <button
+                    className="flex-1 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-white"
+                    onClick={fundBounty}
+                  >
                     Fund bounty
                   </button>
                 </div>
@@ -413,7 +430,10 @@ export default function Home() {
                   className="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm outline-none focus:border-zinc-600"
                   placeholder="https://github.com/owner/repo/pull/999"
                 />
-                <button className="mt-3 w-full rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950" onClick={submitClaim}>
+                <button
+                  className="mt-3 w-full rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-white"
+                  onClick={submitClaim}
+                >
                   Submit claim
                 </button>
               </div>
@@ -433,7 +453,10 @@ export default function Home() {
                     className="w-36 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm outline-none focus:border-zinc-600"
                     placeholder="0.01"
                   />
-                  <button className="flex-1 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950" onClick={payout}>
+                  <button
+                    className="flex-1 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-white"
+                    onClick={payout}
+                  >
                     Payout
                   </button>
                 </div>
