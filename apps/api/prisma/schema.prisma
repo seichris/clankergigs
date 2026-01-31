@@ -1,0 +1,133 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Repo {
+  id                String   @id @default(cuid())
+  repoHash          String   @unique
+  maintainerAddress String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  bounties Bounty[]
+}
+
+model Bounty {
+  id          String   @id @default(cuid())
+  bountyId    String   @unique
+  repoHash    String
+  issueNumber Int
+  metadataURI String
+  status      String
+
+  chainId         Int
+  contractAddress String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  repo Repo @relation(fields: [repoHash], references: [repoHash])
+
+  assets   BountyAsset[]
+  fundings Funding[]
+  claims   Claim[]
+  payouts  Payout[]
+  refunds  Refund[]
+
+  @@unique([repoHash, issueNumber, chainId, contractAddress])
+}
+
+model BountyAsset {
+  id        String @id @default(cuid())
+  bountyId  String
+  token     String // 0x... or 0x000... for ETH
+  escrowed  String @default("0")
+  funded    String @default("0")
+  paid      String @default("0")
+  updatedAt DateTime @updatedAt
+
+  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+
+  @@unique([bountyId, token])
+}
+
+model Funding {
+  id          String   @id @default(cuid())
+  bountyId    String
+  token       String
+  funder      String
+  amountWei   String
+  lockedUntil Int
+  txHash      String
+  logIndex    Int
+  blockNumber Int
+  createdAt   DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+
+  @@unique([txHash, logIndex])
+}
+
+model Claim {
+  id          String   @id @default(cuid())
+  bountyId    String
+  claimId     Int
+  claimer     String
+  metadataURI String
+  txHash      String
+  logIndex    Int
+  blockNumber Int
+  createdAt   DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+
+  @@unique([bountyId, claimId])
+  @@unique([txHash, logIndex])
+}
+
+model Payout {
+  id          String   @id @default(cuid())
+  bountyId    String
+  token       String
+  recipient   String
+  amountWei   String
+  txHash      String
+  logIndex    Int
+  blockNumber Int
+  createdAt   DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+
+  @@unique([txHash, logIndex])
+}
+
+model Refund {
+  id          String   @id @default(cuid())
+  bountyId    String
+  token       String
+  funder      String
+  amountWei   String
+  txHash      String
+  logIndex    Int
+  blockNumber Int
+  createdAt   DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+
+  @@unique([txHash, logIndex])
+}
+
+model IndexerState {
+  id              String   @id @default(cuid())
+  chainId         Int
+  contractAddress String
+  lastBlock       Int
+  updatedAt       DateTime @updatedAt
+
+  @@unique([chainId, contractAddress])
+}
