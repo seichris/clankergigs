@@ -1,0 +1,132 @@
+name: "Feature Request"
+description: "Propose a new feature and (optionally) attach a bounty to showcase the flow."
+title: "[Feature]: "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a new feature! This template is designed to demonstrate how gh-bounties connects a clear spec to a funded bounty and a claimable PR.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Feature summary
+      description: One sentence on what should be built.
+      placeholder: "Add auto-bounty labels when a funded issue is created"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What user pain or workflow gap does this solve?
+      placeholder: "Maintainers miss bounty-funded issues because they don't surface in existing triage views."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the feature at a high level.
+      placeholder: "When a bounty is funded on-chain, the API should apply a \"bounty: funded\" label to the GitHub issue and sync status changes."
+    validations:
+      required: true
+
+  - type: textarea
+    id: stories
+    attributes:
+      label: User stories
+      description: Who benefits and how?
+      placeholder: |
+        - As a maintainer, I can instantly see funded issues in my backlog.
+        - As a developer, I can filter for funded bounties to decide what to build.
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete, testable outcomes.
+      placeholder: |
+        - Label applied within 60s of on-chain bounty creation
+        - Label removed when bounty is cancelled or paid
+        - Works for public repos with GitHub App installed
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope / effort
+      options:
+        - Small (hours)
+        - Medium (1-3 days)
+        - Large (1+ weeks)
+    validations:
+      required: true
+
+  - type: input
+    id: related
+    attributes:
+      label: Related links
+      description: Link to existing issues, PRs, or docs (if any).
+      placeholder: "Issue #12, PR #34, or docs link"
+    validations:
+      required: false
+
+  - type: textarea
+    id: bounty
+    attributes:
+      label: Bounty details (optional)
+      description: Fill this out to showcase the funding flow.
+      placeholder: |
+        - Amount:
+        - Token:
+        - Chain:
+        - Escrow/contract address:
+        - Funding source (maintainer, sponsor, community):
+        - Target repo/issue:
+    validations:
+      required: false
+
+  - type: dropdown
+    id: funding_status
+    attributes:
+      label: Funding status
+      options:
+        - Not seeking funding
+        - Proposed (no funds yet)
+        - Funded on-chain
+    validations:
+      required: true
+
+  - type: textarea
+    id: success
+    attributes:
+      label: Success metrics
+      description: How will we know this feature is working?
+      placeholder: "% of funded issues labeled within 1 minute, number of bounty claims, maintainer feedback"
+    validations:
+      required: false
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks, abuse, or security considerations
+      description: Any edge cases or potential exploits?
+      placeholder: "Label spam, replayed events, GitHub rate limits, spoofed webhooks"
+    validations:
+      required: false
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation notes
+      description: Optional technical details or constraints.
+      placeholder: "Webhook verification already exists in apps/api; use it to authenticate label updates."
+    validations:
+      required: false
