@@ -21,3 +21,4 @@ contracts/broadcast
 .pnpm-store/
 
 key.pem
+.worktrees/

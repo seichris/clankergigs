@@ -15,6 +15,13 @@ const EnvSchema = z.object({
   GITHUB_INSTALLATION_ID: z.string().optional().or(z.literal("")),
   GITHUB_PRIVATE_KEY_PEM: z.string().optional().or(z.literal("")),
   GITHUB_TOKEN: z.string().optional().or(z.literal("")),
+  GITHUB_AUTH_MODE: z
+    .preprocess(
+      (value) => (typeof value === "string" ? value.toLowerCase() : value),
+      z.enum(["pat", "app"])
+    )
+    .optional()
+    .default("pat"),
   PORT: z.coerce.number().int().positive().default(8787)
 });
 

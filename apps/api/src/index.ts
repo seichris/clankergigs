@@ -11,9 +11,12 @@ async function main() {
 
   // Indexer is optional while bootstrapping the UI, but usually you'll set CONTRACT_ADDRESS.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0) {
+    const githubMode = env.GITHUB_AUTH_MODE ?? "pat";
     const github =
-      env.GITHUB_APP_ID && env.GITHUB_INSTALLATION_ID && env.GITHUB_PRIVATE_KEY_PEM
-        ? { appId: env.GITHUB_APP_ID, installationId: env.GITHUB_INSTALLATION_ID, privateKeyPem: env.GITHUB_PRIVATE_KEY_PEM }
+      githubMode === "app"
+        ? env.GITHUB_APP_ID && env.GITHUB_INSTALLATION_ID && env.GITHUB_PRIVATE_KEY_PEM
+          ? { appId: env.GITHUB_APP_ID, installationId: env.GITHUB_INSTALLATION_ID, privateKeyPem: env.GITHUB_PRIVATE_KEY_PEM }
+          : null
         : env.GITHUB_TOKEN && env.GITHUB_TOKEN.length > 0
           ? { userToken: env.GITHUB_TOKEN }
           : null;
