@@ -9,6 +9,10 @@ contract GHBountiesTest is Test {
     GHBounties internal bounties;
     MockERC20 internal usdc;
 
+    uint256 internal payoutSignerKey = 0xA11CE;
+    address internal payoutSigner;
+    address internal dao = address(0xDA0);
+
     address internal maintainer = address(0xA11CE);
     address internal funder1 = address(0xB0B);
     address internal funder2 = address(0xCAFE);
@@ -18,7 +22,8 @@ contract GHBountiesTest is Test {
     uint256 internal issueNumber = 123;
 
     function setUp() public {
-        bounties = new GHBounties(7 days);
+        payoutSigner = vm.addr(payoutSignerKey);
+        bounties = new GHBounties(7 days, payoutSigner, dao, uint64(30 days));
         usdc = new MockERC20("USD Coin", "USDC", 6);
         vm.deal(maintainer, 100 ether);
         vm.deal(funder1, 100 ether);
@@ -29,10 +34,23 @@ contract GHBountiesTest is Test {
         usdc.mint(funder2, 1_000_000_000);
     }
 
-    function test_Flow_Fund_Claim_Payout() public {
-        vm.prank(maintainer);
-        bounties.registerRepo(repoHash);
+    function _signPayout(
+        bytes32 bountyId,
+        address token,
+        address recipient,
+        uint256 amount,
+        uint256 nonce,
+        uint256 deadline
+    ) internal view returns (bytes memory sig) {
+        bytes32 typeHash =
+            keccak256("Payout(bytes32 bountyId,address token,address recipient,uint256 amount,uint256 nonce,uint256 deadline)");
+        bytes32 structHash = keccak256(abi.encode(typeHash, bountyId, token, recipient, amount, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", bounties.DOMAIN_SEPARATOR(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(payoutSignerKey, digest);
+        return abi.encodePacked(r, s, v);
+    }
 
+    function test_Flow_Fund_Claim_Payout() public {
         bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "ipfs://issue-metadata");
 
         vm.prank(funder1);
@@ -55,8 +73,10 @@ contract GHBountiesTest is Test {
 
         uint256 devBefore = dev.balance;
 
-        vm.prank(maintainer);
-        bounties.payout(bountyId, address(0), payable(dev), 3 ether);
+        uint256 nonce = bounties.payoutNonces(bountyId);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signPayout(bountyId, address(0), dev, 3 ether, nonce, deadline);
+        bounties.payoutWithAuthorization(bountyId, address(0), payable(dev), 3 ether, nonce, deadline, sig);
 
         assertEq(dev.balance, devBefore + 3 ether);
         (esc, funded, paid) = bounties.getTotals(bountyId, address(0));
@@ -65,9 +85,6 @@ contract GHBountiesTest is Test {
     }
 
     function test_WithdrawAfterTimeout_OnlyIfNoPayout() public {
-        vm.prank(maintainer);
-        bounties.registerRepo(repoHash);
-
         bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "");
 
         vm.prank(funder1);
@@ -87,16 +104,15 @@ contract GHBountiesTest is Test {
     }
 
     function test_WithdrawAfterTimeout_BlockedIfPaid() public {
-        vm.prank(maintainer);
-        bounties.registerRepo(repoHash);
-
         bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "");
 
         vm.prank(funder1);
         bounties.fundBountyETH{value: 1 ether}(bountyId, 7 days);
 
-        vm.prank(maintainer);
-        bounties.payout(bountyId, address(0), payable(dev), 0.5 ether);
+        uint256 nonce = bounties.payoutNonces(bountyId);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signPayout(bountyId, address(0), dev, 0.5 ether, nonce, deadline);
+        bounties.payoutWithAuthorization(bountyId, address(0), payable(dev), 0.5 ether, nonce, deadline, sig);
 
         vm.warp(block.timestamp + 8 days);
         vm.expectRevert(GHBounties.RefundNotAvailable.selector);
@@ -105,9 +121,6 @@ contract GHBountiesTest is Test {
     }
 
     function test_Fund_USDC_TracksTotalsAndLock() public {
-        vm.prank(maintainer);
-        bounties.registerRepo(repoHash);
-
         bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "");
 
         vm.startPrank(funder1);
@@ -126,9 +139,6 @@ contract GHBountiesTest is Test {
     }
 
     function test_Lock_ExtendsToMax() public {
-        vm.prank(maintainer);
-        bounties.registerRepo(repoHash);
-
         bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "");
 
         vm.prank(funder1);
@@ -141,5 +151,85 @@ contract GHBountiesTest is Test {
         (, uint64 until2) = bounties.getContribution(bountyId, address(0), funder1);
 
         assertEq(until2, until1); // second fund should not shorten lock
+    }
+
+    function test_PayoutWithAuthorization_ReplayReverts() public {
+        bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "https://github.com/seichris/gh-bounties/issues/1");
+        vm.prank(funder1);
+        bounties.fundBountyETH{value: 1 ether}(bountyId, 0);
+
+        uint256 nonce = bounties.payoutNonces(bountyId);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signPayout(bountyId, address(0), dev, 0.5 ether, nonce, deadline);
+        bounties.payoutWithAuthorization(bountyId, address(0), payable(dev), 0.5 ether, nonce, deadline, sig);
+
+        // Reusing the same authorization should fail due to nonce mismatch.
+        vm.expectRevert(GHBounties.InvalidNonce.selector);
+        bounties.payoutWithAuthorization(bountyId, address(0), payable(dev), 0.5 ether, nonce, deadline, sig);
+    }
+
+    function test_PayoutWithAuthorization_ExpiredReverts() public {
+        bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "https://github.com/seichris/gh-bounties/issues/1");
+        vm.prank(funder1);
+        bounties.fundBountyETH{value: 1 ether}(bountyId, 0);
+
+        uint256 nonce = bounties.payoutNonces(bountyId);
+        uint256 deadline = block.timestamp - 1;
+        bytes memory sig = _signPayout(bountyId, address(0), dev, 0.1 ether, nonce, deadline);
+        vm.expectRevert(GHBounties.SignatureExpired.selector);
+        bounties.payoutWithAuthorization(bountyId, address(0), payable(dev), 0.1 ether, nonce, deadline, sig);
+    }
+
+    function test_DaoPayout_AfterDelay() public {
+        bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "https://github.com/seichris/gh-bounties/issues/1");
+        vm.prank(funder1);
+        bounties.fundBountyETH{value: 1 ether}(bountyId, 0);
+
+        // Too early.
+        vm.expectRevert(GHBounties.DaoNotAvailable.selector);
+        vm.prank(dao);
+        bounties.daoPayout(bountyId, address(0), payable(dev), 0.25 ether);
+
+        vm.warp(block.timestamp + 31 days);
+        uint256 before = dev.balance;
+        vm.prank(dao);
+        bounties.daoPayout(bountyId, address(0), payable(dev), 0.25 ether);
+        assertEq(dev.balance, before + 0.25 ether);
+    }
+
+    function test_FunderPayout_AllowsOtherFunderWithdrawAfterTimeout() public {
+        bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "https://github.com/seichris/gh-bounties/issues/1");
+
+        vm.prank(funder1);
+        bounties.fundBountyETH{value: 1 ether}(bountyId, 0);
+
+        vm.prank(funder2);
+        bounties.fundBountyETH{value: 2 ether}(bountyId, 7 days);
+
+        uint256 devBefore = dev.balance;
+        vm.prank(funder1);
+        bounties.funderPayout(bountyId, address(0), payable(dev), 1 ether);
+        assertEq(dev.balance, devBefore + 1 ether);
+
+        vm.warp(block.timestamp + 8 days);
+        uint256 funder2Before = funder2.balance;
+        vm.prank(funder2);
+        bounties.withdrawAfterTimeout(bountyId, address(0));
+        assertEq(funder2.balance, funder2Before + 2 ether);
+    }
+
+    function test_FunderPayout_RevertsIfBackendPayoutHappened() public {
+        bytes32 bountyId = bounties.createBounty(repoHash, issueNumber, "https://github.com/seichris/gh-bounties/issues/1");
+        vm.prank(funder1);
+        bounties.fundBountyETH{value: 1 ether}(bountyId, 0);
+
+        uint256 nonce = bounties.payoutNonces(bountyId);
+        uint256 deadline = block.timestamp + 1 days;
+        bytes memory sig = _signPayout(bountyId, address(0), dev, 0.1 ether, nonce, deadline);
+        bounties.payoutWithAuthorization(bountyId, address(0), payable(dev), 0.1 ether, nonce, deadline, sig);
+
+        vm.expectRevert(GHBounties.PayoutModeLocked.selector);
+        vm.prank(funder1);
+        bounties.funderPayout(bountyId, address(0), payable(dev), 0.1 ether);
     }
 }

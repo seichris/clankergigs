@@ -17,12 +17,19 @@ export default function Home() {
   const [lockDays, setLockDays] = useState("7");
   const [payoutRecipient, setPayoutRecipient] = useState("");
   const [payoutAmount, setPayoutAmount] = useState("0.01");
+  const [githubUserToken, setGithubUserToken] = useState("");
   const [claims, setClaims] = useState<Array<{ claimId: number; claimer: string; metadataURI: string }>>([]);
   const [claimerShares, setClaimerShares] = useState<Record<string, number>>({});
   const [totals, setTotals] = useState<{
     escrowed: bigint;
     funded: bigint;
     paid: bigint;
+    decimals: number;
+    token: Address;
+  } | null>(null);
+  const [myContribution, setMyContribution] = useState<{
+    amount: bigint;
+    lockedUntil: bigint;
     decimals: number;
     token: Address;
   } | null>(null);
@@ -45,7 +52,7 @@ export default function Home() {
 
   const payoutSplits = useMemo(() => {
     if (claimers.length === 0) return [];
-    const total = totals?.escrowed ?? 0n;
+    const total = totals?.escrowed ?? BigInt(0);
     const totalShare = claimers.reduce((sum, addr) => sum + (claimerShares[addr] ?? 0), 0);
     if (!totals || totalShare <= 0) {
       return claimers.map((claimer) => ({ claimer, share: claimerShares[claimer] ?? 0, amount: null as bigint | null }));
@@ -58,19 +65,48 @@ export default function Home() {
       amount: (total * BigInt(claimerShares[claimer] ?? 0)) / denom
     }));
 
-    let allocated = rows.reduce((sum, row) => sum + (row.amount ?? 0n), 0n);
+    let allocated = rows.reduce((sum, row) => sum + (row.amount ?? BigInt(0)), BigInt(0));
     let remainder = total - allocated;
-    if (remainder > 0n) {
+    if (remainder > BigInt(0)) {
       for (const row of rows) {
-        if (remainder === 0n) break;
+        if (remainder === BigInt(0)) break;
         if (row.share <= 0) continue;
-        row.amount = (row.amount ?? 0n) + 1n;
-        remainder -= 1n;
+        row.amount = (row.amount ?? BigInt(0)) + BigInt(1);
+        remainder -= BigInt(1);
       }
     }
 
     return rows;
   }, [claimers, claimerShares, totals]);
+
+  const myPayoutSplits = useMemo(() => {
+    if (claimers.length === 0) return [];
+    const total = myContribution?.amount ?? BigInt(0);
+    const totalShare = claimers.reduce((sum, addr) => sum + (claimerShares[addr] ?? 0), 0);
+    if (!myContribution || totalShare <= 0) {
+      return claimers.map((claimer) => ({ claimer, share: claimerShares[claimer] ?? 0, amount: null as bigint | null }));
+    }
+
+    const denom = BigInt(totalShare);
+    const rows = claimers.map((claimer) => ({
+      claimer,
+      share: claimerShares[claimer] ?? 0,
+      amount: (total * BigInt(claimerShares[claimer] ?? 0)) / denom
+    }));
+
+    let allocated = rows.reduce((sum, row) => sum + (row.amount ?? BigInt(0)), BigInt(0));
+    let remainder = total - allocated;
+    if (remainder > BigInt(0)) {
+      for (const row of rows) {
+        if (remainder === BigInt(0)) break;
+        if (row.share <= 0) continue;
+        row.amount = (row.amount ?? BigInt(0)) + BigInt(1);
+        remainder -= BigInt(1);
+      }
+    }
+
+    return rows;
+  }, [claimers, claimerShares, myContribution]);
 
   const derived = useMemo(() => {
     if (!parsed) return null;
@@ -95,24 +131,24 @@ export default function Home() {
 
   function splitPayouts(total: bigint, shares: Record<string, number>, order: string[]) {
     const totalShare = order.reduce((sum, addr) => sum + (shares[addr] ?? 0), 0);
-    if (total <= 0n || totalShare <= 0) return [];
+    if (total <= BigInt(0) || totalShare <= 0) return [];
     const denom = BigInt(totalShare);
     const payouts = order.map((addr) => ({
       recipient: addr,
       share: shares[addr] ?? 0,
       amount: (total * BigInt(shares[addr] ?? 0)) / denom
     }));
-    let allocated = payouts.reduce((sum, p) => sum + p.amount, 0n);
+    let allocated = payouts.reduce((sum, p) => sum + p.amount, BigInt(0));
     let remainder = total - allocated;
-    if (remainder > 0n) {
+    if (remainder > BigInt(0)) {
       for (const p of payouts) {
-        if (remainder === 0n) break;
+        if (remainder === BigInt(0)) break;
         if (p.share <= 0) continue;
-        p.amount += 1n;
-        remainder -= 1n;
+        p.amount += BigInt(1);
+        remainder -= BigInt(1);
       }
     }
-    return payouts.filter((p) => p.amount > 0n);
+    return payouts.filter((p) => p.amount > BigInt(0));
   }
 
   function updateShare(target: string, value: number) {
@@ -211,7 +247,7 @@ export default function Home() {
           ]);
           const walletBlock = BigInt(walletBlockHex);
           const diff = walletBlock > appBlock ? walletBlock - appBlock : appBlock - walletBlock;
-          if (diff > 5n) {
+          if (diff > BigInt(5)) {
             if (!cancelled) {
               setWalletWarning(
                 `Wallet RPC looks out of sync with app RPC (wallet block ${walletBlock} vs app block ${appBlock}).`
@@ -250,12 +286,16 @@ export default function Home() {
   useEffect(() => {
     if (!derived) {
       setTotals(null);
+      setMyContribution(null);
       return;
     }
     fetchTotals().catch(() => {
       // Best-effort; errors logged via explicit refresh.
     });
-  }, [derived, asset, tokenAddress]);
+    fetchMyContribution().catch(() => {
+      // Best-effort; errors logged via explicit actions.
+    });
+  }, [derived, asset, tokenAddress, wallet]);
 
   async function fetchTotals() {
     if (!derived) return null;
@@ -294,22 +334,48 @@ export default function Home() {
     return nextTotals;
   }
 
+  async function fetchMyContribution() {
+    if (!derived || !wallet) return null;
+    const { contractAddress } = getConfig();
+    const pc = getPublicClient();
+    const t = asset === "ETH" ? ("0x0000000000000000000000000000000000000000" as Address) : (tokenAddress.trim() as Address);
+    if (asset !== "ETH" && !isAddress(t)) {
+      setMyContribution(null);
+      throw new Error("Invalid token address");
+    }
+
+    let decimals = 18;
+    if (asset !== "ETH") {
+      try {
+        decimals = Number(
+          (await pc.readContract({
+            address: t,
+            abi: erc20Abi,
+            functionName: "decimals"
+          })) as any
+        );
+      } catch {
+        decimals = 6;
+      }
+    }
+
+    const res = (await pc.readContract({
+      address: contractAddress,
+      abi: ghBountiesAbi,
+      functionName: "getContribution",
+      args: [derived.bountyId, t, wallet]
+    })) as readonly [bigint, bigint];
+
+    const next = { amount: res[0], lockedUntil: res[1], decimals, token: t };
+    setMyContribution(next);
+    return next;
+  }
+
   async function ensureBountyExists() {
     if (!derived || !parsed) return;
     const { contractAddress } = getConfig();
     const pc = getPublicClient();
     const wc = getWalletClient();
-
-    const repo = (await pc.readContract({
-      address: contractAddress,
-      abi: ghBountiesAbi,
-      functionName: "repos",
-      args: [derived.repoHash]
-    })) as readonly [Address, boolean];
-
-    if (!repo[1]) {
-      throw new Error("Repo not registered. Register repo first.");
-    }
 
     const bounty = (await pc.readContract({
       address: contractAddress,
@@ -318,8 +384,8 @@ export default function Home() {
       args: [derived.bountyId]
     })) as readonly [string, bigint, number, bigint, string];
 
-    const createdAt = BigInt(bounty[3] ?? 0n);
-    if (createdAt !== 0n) return;
+    const createdAt = BigInt(bounty[3] ?? BigInt(0));
+    if (createdAt !== BigInt(0)) return;
 
     const [account] = await wc.getAddresses();
     const hash = await wc.writeContract({
@@ -340,26 +406,6 @@ export default function Home() {
       pushLog(`connected: ${addr}`);
     } catch (e: any) {
       pushLog(e?.message ?? String(e));
-    }
-  }
-
-  async function registerRepo() {
-    if (!derived) return;
-    try {
-      const { contractAddress } = getConfig();
-      const wc = getWalletClient();
-      const [account] = await wc.getAddresses();
-
-      const hash = await wc.writeContract({
-        address: contractAddress,
-        abi: ghBountiesAbi,
-        functionName: "registerRepo",
-        args: [derived.repoHash],
-        account
-      });
-      pushLog(`registerRepo tx: ${hash}`);
-    } catch (e: any) {
-      pushLog(e?.shortMessage ?? e?.message ?? String(e));
     }
   }
 
@@ -452,15 +498,19 @@ export default function Home() {
   async function payout() {
     if (!derived) return;
     try {
+      const ghToken = githubUserToken.trim();
+      if (!ghToken) throw new Error("Missing GitHub token (needs repo admin)");
+
       const recipient = payoutRecipient.trim();
       const { contractAddress } = getConfig();
       const wc = getWalletClient();
       const [account] = await wc.getAddresses();
+      const pc = getPublicClient();
 
       if (claimers.length > 1) {
         const currentTotals = await fetchTotals();
         if (!currentTotals) throw new Error("Unable to load totals");
-        if (currentTotals.escrowed <= 0n) throw new Error("No escrowed funds to payout");
+        if (currentTotals.escrowed <= BigInt(0)) throw new Error("No escrowed funds to payout");
 
         const payouts = splitPayouts(currentTotals.escrowed, claimerShares, claimers);
         if (payouts.length === 0) {
@@ -469,38 +519,50 @@ export default function Home() {
         }
 
         for (const p of payouts) {
+          const authRes = await fetch(`${apiUrl}/payout-auth`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${ghToken}`
+            },
+            body: JSON.stringify({
+              bountyId: derived.bountyId,
+              token: currentTotals.token,
+              recipient: p.recipient,
+              amountWei: p.amount.toString()
+            })
+          });
+          const auth = (await authRes.json()) as any;
+          if (!authRes.ok) throw new Error(auth?.error ?? `payout-auth failed (${authRes.status})`);
+
+          const nonce = BigInt(auth.nonce);
+          const deadline = BigInt(auth.deadline);
+          const signature = auth.signature as `0x${string}`;
+
           const hash = await wc.writeContract({
             address: contractAddress,
             abi: ghBountiesAbi,
-            functionName: "payout",
-            args: [derived.bountyId, currentTotals.token, p.recipient as Address, p.amount],
+            functionName: "payoutWithAuthorization",
+            args: [derived.bountyId, currentTotals.token, p.recipient as Address, p.amount, nonce, deadline, signature],
             account
           });
           pushLog(`payout(${p.recipient}) tx: ${hash}`);
+          await pc.waitForTransactionReceipt({ hash });
         }
         return;
       }
 
       if (!isAddress(recipient)) throw new Error("Invalid recipient address");
-      if (asset === "ETH") {
-        const hash = await wc.writeContract({
-          address: contractAddress,
-          abi: ghBountiesAbi,
-          functionName: "payout",
-          args: [derived.bountyId, token as Address, recipient as Address, parseEther(payoutAmount)],
-          account
-        });
-        pushLog(`payout(ETH) tx: ${hash}`);
-      } else {
-        const t = tokenAddress.trim();
-        if (!isAddress(t)) throw new Error("Invalid token address");
 
-        const pc = getPublicClient();
-        let decimals = 6;
+      let decimals = 18;
+      let t = token as Address;
+      if (asset !== "ETH") {
+        t = tokenAddress.trim() as Address;
+        if (!isAddress(t)) throw new Error("Invalid token address");
         try {
           decimals = Number(
             (await pc.readContract({
-              address: t as Address,
+              address: t,
               abi: erc20Abi,
               functionName: "decimals"
             })) as any
@@ -508,17 +570,77 @@ export default function Home() {
         } catch {
           decimals = 6;
         }
+      }
 
-        const amount = parseUnits(payoutAmount, decimals);
+      const amount = asset === "ETH" ? parseEther(payoutAmount) : parseUnits(payoutAmount, decimals);
+
+      const authRes = await fetch(`${apiUrl}/payout-auth`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${ghToken}`
+        },
+        body: JSON.stringify({
+          bountyId: derived.bountyId,
+          token: t,
+          recipient,
+          amountWei: amount.toString()
+        })
+      });
+      const auth = (await authRes.json()) as any;
+      if (!authRes.ok) throw new Error(auth?.error ?? `payout-auth failed (${authRes.status})`);
+
+      const nonce = BigInt(auth.nonce);
+      const deadline = BigInt(auth.deadline);
+      const signature = auth.signature as `0x${string}`;
+
+      const hash = await wc.writeContract({
+        address: contractAddress,
+        abi: ghBountiesAbi,
+        functionName: "payoutWithAuthorization",
+        args: [derived.bountyId, t, recipient as Address, amount, nonce, deadline, signature],
+        account
+      });
+      pushLog(`payout(${recipient}) tx: ${hash}`);
+      await pc.waitForTransactionReceipt({ hash });
+    } catch (e: any) {
+      pushLog(e?.shortMessage ?? e?.message ?? String(e));
+    }
+  }
+
+  async function payoutMyContribution() {
+    if (!derived || !wallet) return;
+    try {
+      if (claimers.length === 0) throw new Error("No claimers loaded");
+      const { contractAddress } = getConfig();
+      const wc = getWalletClient();
+      const [account] = await wc.getAddresses();
+      const pc = getPublicClient();
+
+      const contrib = await fetchMyContribution();
+      if (!contrib) throw new Error("Unable to load your contribution");
+      if (contrib.amount <= BigInt(0)) throw new Error("You have no remaining contribution for this bounty");
+
+      const payouts = splitPayouts(contrib.amount, claimerShares, claimers);
+      if (payouts.length === 0) {
+        pushLog("No payouts selected (all shares are 0).");
+        return;
+      }
+
+      for (const p of payouts) {
         const hash = await wc.writeContract({
           address: contractAddress,
           abi: ghBountiesAbi,
-          functionName: "payout",
-          args: [derived.bountyId, t as Address, recipient as Address, amount],
+          functionName: "funderPayout",
+          args: [derived.bountyId, contrib.token, p.recipient as Address, p.amount],
           account
         });
-        pushLog(`payout(token) tx: ${hash}`);
+        pushLog(`funderPayout(${p.recipient}) tx: ${hash}`);
+        await pc.waitForTransactionReceipt({ hash });
       }
+
+      await fetchTotals();
+      await fetchMyContribution();
     } catch (e: any) {
       pushLog(e?.shortMessage ?? e?.message ?? String(e));
     }
@@ -612,13 +734,6 @@ export default function Home() {
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-6">
             <h2 className="text-lg font-semibold">Actions</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button
-                className="sm:col-span-2 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-zinc-100"
-                onClick={registerRepo}
-                disabled={txDisabled}
-              >
-                Register repo (maintainer)
-              </button>
               <div className="sm:col-span-2 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="text-sm font-medium text-zinc-100">Funding asset</div>
@@ -703,6 +818,12 @@ export default function Home() {
 
               <div className="sm:col-span-2 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
                 <div className="text-sm font-medium text-zinc-100">Admin payout</div>
+                <input
+                  value={githubUserToken}
+                  onChange={(e) => setGithubUserToken(e.target.value)}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm outline-none focus:border-zinc-600"
+                  placeholder="GitHub token (repo admin) for payout authorization"
+                />
                 {claimers.length > 1 ? (
                   <>
                     <div className="text-sm text-zinc-400">Payout recipients (split by share)</div>
@@ -730,7 +851,7 @@ export default function Home() {
                               className="w-full accent-zinc-100"
                             />
                             <div className="w-28 text-right text-xs text-zinc-300">
-                              {totals ? formatUnits(row.amount ?? 0n, totals.decimals) : "—"}
+                              {totals ? formatUnits(row.amount ?? BigInt(0), totals.decimals) : "—"}
                             </div>
                           </div>
                         </div>
@@ -785,6 +906,51 @@ export default function Home() {
                     </div>
                   </>
                 )}
+              </div>
+
+              <div className="sm:col-span-2 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                <div className="text-sm font-medium text-zinc-100">Funder payout (your portion)</div>
+                <div className="text-xs text-zinc-400">
+                  Your remaining contribution:{" "}
+                  <span className="text-zinc-200">
+                    {myContribution ? formatUnits(myContribution.amount, myContribution.decimals) : "—"}
+                  </span>
+                </div>
+                {claimers.length === 0 ? (
+                  <div className="text-sm text-zinc-400">Load claims to see payout recipients.</div>
+                ) : (
+                  <div className="grid gap-3">
+                    {myPayoutSplits.map((row) => (
+                      <div key={row.claimer} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+                        <div className="flex items-center justify-between text-xs text-zinc-400">
+                          <span className="truncate">{row.claimer}</span>
+                          <span className="text-zinc-200">{row.share}%</span>
+                        </div>
+                        <div className="mt-2 flex items-center gap-3">
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={row.share}
+                            onChange={(e) => updateShare(row.claimer, Number(e.target.value))}
+                            className="w-full accent-zinc-100"
+                          />
+                          <div className="w-28 text-right text-xs text-zinc-300">
+                            {myContribution ? formatUnits(row.amount ?? BigInt(0), myContribution.decimals) : "—"}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  className="w-full rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-zinc-100"
+                  onClick={payoutMyContribution}
+                  disabled={txDisabled || claimers.length === 0}
+                >
+                  Pay my portion
+                </button>
               </div>
 
               <button

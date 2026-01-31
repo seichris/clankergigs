@@ -10,6 +10,17 @@ const EnvSchema = z.object({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional()
     .or(z.literal("")),
+  BACKEND_SIGNER_PRIVATE_KEY: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{64}$/)
+    .optional()
+    .or(z.literal("")),
+  DAO_ADDRESS: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional()
+    .or(z.literal("")),
+  DAO_DELAY_SECONDS: z.coerce.number().int().min(0).default(0),
   GITHUB_WEBHOOK_SECRET: z.string().optional().or(z.literal("")),
   GITHUB_APP_ID: z.string().optional().or(z.literal("")),
   GITHUB_INSTALLATION_ID: z.string().optional().or(z.literal("")),
