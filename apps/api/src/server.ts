@@ -1,10 +1,13 @@
 import Fastify from "fastify";
+import cors from "@fastify/cors";
 import { getPrisma } from "./db.js";
 import { registerGithubWebhookRoutes } from "./github/webhook.js";
 
 export async function buildServer() {
   const app = Fastify({ logger: true });
   const prisma = getPrisma();
+
+  await app.register(cors, { origin: true });
 
   app.get("/health", async () => ({ ok: true }));
 
