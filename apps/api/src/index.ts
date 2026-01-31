@@ -28,7 +28,7 @@ async function main() {
       // Back-compat: allow Authorization: Bearer <token> for local testing / scripts.
       const auth = req.headers.authorization || "";
       const m = auth.match(/^Bearer\s+(.+)$/i);
-      const githubToken = (m?.[1]?.trim() || "") || getGithubAccessTokenFromRequest(req) || "";
+      const githubToken = (m?.[1]?.trim() || "") || (await getGithubAccessTokenFromRequest(req)) || "";
       if (!githubToken) return reply.code(401).send({ error: "Not logged in (use GitHub OAuth login or send Authorization: Bearer <token>)" });
 
       // Be tolerant of mis-parsed JSON bodies (e.g. body arrives as a string).

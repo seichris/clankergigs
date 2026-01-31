@@ -131,3 +131,15 @@ model IndexerState {
 
   @@unique([chainId, contractAddress])
 }
+
+model GithubSession {
+  id            String   @id
+  accessToken   String
+  userLogin     String
+  userId        Int
+  userAvatarUrl String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([expiresAt])
+}

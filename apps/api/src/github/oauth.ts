@@ -1,16 +1,14 @@
 import crypto from "node:crypto";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { getPrisma } from "../db.js";
 
 const COOKIE_NAME = "ghb_session";
 const STATE_TTL_MS = 10 * 60 * 1000;
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 type GithubUser = { login: string; id: number; avatar_url?: string | null };
-type Session = { accessToken: string; user: GithubUser; createdAt: number };
 
 const pendingStates = new Map<string, { returnTo: string; createdAt: number }>();
-const sessions = new Map<string, Session>();
-
 function nowMs() {
   return Date.now();
 }
@@ -43,33 +41,43 @@ function clearCookie(reply: FastifyReply) {
   reply.header("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
-export function getGithubAccessTokenFromRequest(req: FastifyRequest): string | null {
+export function getGithubAccessTokenFromRequest(req: FastifyRequest): Promise<string | null> {
   const cookies = parseCookies(req.headers.cookie);
   const sid = cookies[COOKIE_NAME];
-  if (!sid) return null;
-  const s = sessions.get(sid);
-  if (!s) return null;
-  if (nowMs() - s.createdAt > SESSION_TTL_MS) {
-    sessions.delete(sid);
-    return null;
-  }
-  return s.accessToken;
+  if (!sid) return Promise.resolve(null);
+  const prisma = getPrisma();
+  return prisma.githubSession
+    .findUnique({ where: { id: sid } })
+    .then((s) => {
+      if (!s) return null;
+      if (s.expiresAt.getTime() <= nowMs()) {
+        return prisma.githubSession.delete({ where: { id: sid } }).then(() => null);
+      }
+      return s.accessToken;
+    })
+    .catch(() => null);
 }
 
-export function getGithubUserFromRequest(req: FastifyRequest): GithubUser | null {
+export function getGithubUserFromRequest(req: FastifyRequest): Promise<GithubUser | null> {
   const cookies = parseCookies(req.headers.cookie);
   const sid = cookies[COOKIE_NAME];
-  if (!sid) return null;
-  const s = sessions.get(sid);
-  if (!s) return null;
-  if (nowMs() - s.createdAt > SESSION_TTL_MS) {
-    sessions.delete(sid);
-    return null;
-  }
-  return s.user;
+  if (!sid) return Promise.resolve(null);
+  const prisma = getPrisma();
+  return prisma.githubSession
+    .findUnique({ where: { id: sid } })
+    .then((s) => {
+      if (!s) return null;
+      if (s.expiresAt.getTime() <= nowMs()) {
+        return prisma.githubSession.delete({ where: { id: sid } }).then(() => null);
+      }
+      return { login: s.userLogin, id: s.userId, avatar_url: s.userAvatarUrl };
+    })
+    .catch(() => null);
 }
 
 export function registerGithubOAuthRoutes(app: FastifyInstance) {
+  const prisma = getPrisma();
+
   app.get("/auth/github/start", async (req, reply) => {
     const clientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.GITHUB_CLIENT_ID || "";
     const callbackUrl = process.env.GITHUB_OAUTH_CALLBACK_URL || "";
@@ -143,13 +151,23 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
     if (!user?.login) return reply.code(502).send({ error: "GitHub /user returned invalid payload" });
 
     const sid = randomHex(24);
-    sessions.set(sid, { accessToken, user, createdAt: nowMs() });
+    const expiresAt = new Date(nowMs() + SESSION_TTL_MS);
+    await prisma.githubSession.create({
+      data: {
+        id: sid,
+        accessToken,
+        userLogin: user.login,
+        userId: user.id,
+        userAvatarUrl: user.avatar_url ?? null,
+        expiresAt
+      }
+    });
     setCookie(reply, sid);
     return reply.redirect(st.returnTo || webOrigin);
   });
 
   app.get("/auth/me", async (req, reply) => {
-    const user = getGithubUserFromRequest(req);
+    const user = await getGithubUserFromRequest(req);
     if (!user) return reply.code(401).send({ error: "Not logged in" });
     return reply.send({ user });
   });
@@ -157,7 +175,7 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
   app.post("/auth/logout", async (req, reply) => {
     const cookies = parseCookies(req.headers.cookie);
     const sid = cookies[COOKIE_NAME];
-    if (sid) sessions.delete(sid);
+    if (sid) await prisma.githubSession.delete({ where: { id: sid } }).catch(() => {});
     clearCookie(reply);
     return reply.send({ ok: true });
   });
