@@ -1,6 +1,8 @@
 import { parseAbi } from "viem";
 
 export const ghBountiesAbi = parseAbi([
+  "function repos(bytes32 repoHash) view returns (address maintainer, bool exists)",
+  "function bounties(bytes32 bountyId) view returns (bytes32 repoHash, uint256 issueNumber, uint8 status, uint64 createdAt, string metadataURI)",
   "function registerRepo(bytes32 repoHash)",
   "function createBounty(bytes32 repoHash, uint256 issueNumber, string metadataURI) returns (bytes32)",
   "function fundBountyETH(bytes32 bountyId, uint64 lockDurationSeconds) payable",
