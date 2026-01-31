@@ -31,4 +31,4 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
 - On-chain contract cannot index GitHub issues/PRs. The API will index contract events + fetch GitHub data off-chain.
 - GitHub App integration is WIP. The API now:
   - verifies incoming webhooks at `/github/webhook`
-  - can auto-apply bounty labels when it sees on-chain bounty creation / status changes (requires GitHub App env vars)
+  - can auto-apply bounty labels and post funding comments when it sees on-chain events (requires GitHub App env vars or a `GITHUB_TOKEN` PAT; app creds take precedence)

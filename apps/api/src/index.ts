@@ -14,7 +14,9 @@ async function main() {
     const github =
       env.GITHUB_APP_ID && env.GITHUB_INSTALLATION_ID && env.GITHUB_PRIVATE_KEY_PEM
         ? { appId: env.GITHUB_APP_ID, installationId: env.GITHUB_INSTALLATION_ID, privateKeyPem: env.GITHUB_PRIVATE_KEY_PEM }
-        : null;
+        : env.GITHUB_TOKEN && env.GITHUB_TOKEN.length > 0
+          ? { userToken: env.GITHUB_TOKEN }
+          : null;
 
     await startIndexer({
       rpcUrl: env.RPC_URL,

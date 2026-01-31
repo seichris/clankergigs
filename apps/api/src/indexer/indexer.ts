@@ -1,14 +1,73 @@
 import { getPrisma } from "../db.js";
 import { ghBountiesAbi } from "./abi.js";
-import { createPublicClient, http, isAddress, type Hex } from "viem";
+import { createPublicClient, http, isAddress, formatUnits, type Hex } from "viem";
 import { syncBountyLabels } from "../github/labels.js";
+import { postIssueComment } from "../github/comments.js";
+import type { GithubAuthConfig } from "../github/appAuth.js";
 
 type IndexerConfig = {
   rpcUrl: string;
   chainId: number;
   contractAddress: Hex;
-  github?: { appId: string; installationId: string; privateKeyPem: string } | null;
+  github?: GithubAuthConfig | null;
 };
+
+type PublicClient = ReturnType<typeof createPublicClient>;
+
+const NATIVE_TOKEN = "0x0000000000000000000000000000000000000000";
+
+const erc20MetaAbi = [
+  {
+    name: "decimals",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }]
+  },
+  {
+    name: "symbol",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }]
+  }
+] as const;
+
+const tokenMetaCache = new Map<string, { decimals: number; symbol: string | null }>();
+
+async function getTokenMeta(client: PublicClient, token: string) {
+  if (token === NATIVE_TOKEN) return { decimals: 18, symbol: "ETH" };
+  if (tokenMetaCache.has(token)) return tokenMetaCache.get(token)!;
+
+  let decimals = 18;
+  let symbol: string | null = null;
+  try {
+    decimals = Number(
+      (await client.readContract({
+        address: token as Hex,
+        abi: erc20MetaAbi,
+        functionName: "decimals"
+      })) as any
+    );
+  } catch {
+    decimals = 18;
+  }
+
+  try {
+    const res = (await client.readContract({
+      address: token as Hex,
+      abi: erc20MetaAbi,
+      functionName: "symbol"
+    })) as any;
+    if (typeof res === "string" && res.length > 0) symbol = res;
+  } catch {
+    symbol = null;
+  }
+
+  const meta = { decimals, symbol };
+  tokenMetaCache.set(token, meta);
+  return meta;
+}
 
 function statusFromEnum(v: number): "OPEN" | "IMPLEMENTED" | "CLOSED" {
   if (v === 0) return "OPEN";
@@ -57,7 +116,7 @@ export async function startIndexer(cfg: IndexerConfig) {
     abi: ghBountiesAbi,
     address: cfg.contractAddress,
     onLogs: async (logs) => {
-      for (const log of logs) await handleLog(cfg, log);
+      for (const log of logs) await handleLog(client, cfg, log, { isBackfill: false });
     }
   });
 }
@@ -76,7 +135,7 @@ async function backfill(
     toBlock
   });
 
-  for (const log of logs) await handleLog(cfg, log);
+  for (const log of logs) await handleLog(client, cfg, log, { isBackfill: true });
 
   await prisma.indexerState.upsert({
     where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress: cfg.contractAddress } },
@@ -85,7 +144,7 @@ async function backfill(
   });
 }
 
-async function handleLog(cfg: IndexerConfig, log: any) {
+async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opts?: { isBackfill?: boolean }) {
   const prisma = getPrisma();
   const blockNumber = Number(log.blockNumber ?? 0n);
   const txHash = log.transactionHash as string;
@@ -162,6 +221,37 @@ async function handleLog(cfg: IndexerConfig, log: any) {
       });
 
       await bumpAssetTotals(prisma, bountyId, token, { funded: BigInt(amountWei), escrowed: BigInt(amountWei) });
+
+      if (!opts?.isBackfill) {
+        try {
+          const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+          const issueUrl = bounty?.metadataURI;
+          if (issueUrl) {
+            const meta = await getTokenMeta(client, token);
+            const amountDisplay = formatUnits(BigInt(amountWei), meta.decimals);
+            const tokenLabel =
+              meta.symbol && meta.symbol.length > 0
+                ? meta.symbol
+                : token === NATIVE_TOKEN
+                  ? "ETH"
+                  : `${token.slice(0, 6)}…${token.slice(-4)}`;
+            const lines = [
+              `💸 Bounty funded: ${amountDisplay} ${tokenLabel}`,
+              `Funder: ${funder}`
+            ];
+            if (token !== NATIVE_TOKEN && (!meta.symbol || meta.symbol.length === 0)) {
+              lines.push(`Token: ${token}`);
+            }
+            if (lockedUntil > 0) {
+              const lockDate = new Date(lockedUntil * 1000).toISOString().replace("T", " ").replace("Z", " UTC");
+              lines.push(`Lock until: ${lockDate}`);
+            }
+            await postIssueComment({ github: cfg.github ?? null, issueUrl, body: lines.join("\n") });
+          }
+        } catch {
+          // Best-effort: don't block indexing if GitHub comment fails.
+        }
+      }
       break;
     }
     case "ClaimSubmitted": {
