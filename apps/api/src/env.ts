@@ -2,7 +2,8 @@ import { z } from "zod";
 import dotenv from "dotenv";
 
 const EnvSchema = z.object({
-  DATABASE_URL: z.string().min(1).default("file:./dev.db"),
+  // Keep DB under prisma/ to avoid clutter and match .gitignore.
+  DATABASE_URL: z.string().min(1).default("file:./prisma/dev.db"),
   RPC_URL: z.string().default("http://127.0.0.1:8545"),
   CHAIN_ID: z.coerce.number().int().positive().default(31337),
   CONTRACT_ADDRESS: z
@@ -10,6 +11,11 @@ const EnvSchema = z.object({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional()
     .or(z.literal("")),
+  WEB_ORIGIN: z.string().optional().or(z.literal("")),
+  GITHUB_OAUTH_CLIENT_ID: z.string().optional().or(z.literal("")),
+  GITHUB_OAUTH_CLIENT_SECRET: z.string().optional().or(z.literal("")),
+  GITHUB_OAUTH_CALLBACK_URL: z.string().optional().or(z.literal("")),
+  GITHUB_OAUTH_SCOPE: z.string().optional().or(z.literal("")),
   BACKEND_SIGNER_PRIVATE_KEY: z
     .string()
     .regex(/^0x[a-fA-F0-9]{64}$/)

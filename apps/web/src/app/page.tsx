@@ -17,7 +17,7 @@ export default function Home() {
   const [lockDays, setLockDays] = useState("7");
   const [payoutRecipient, setPayoutRecipient] = useState("");
   const [payoutAmount, setPayoutAmount] = useState("0.01");
-  const [githubUserToken, setGithubUserToken] = useState("");
+  const [githubUser, setGithubUser] = useState<{ login: string; id: number } | null>(null);
   const [claims, setClaims] = useState<Array<{ claimId: number; claimer: string; metadataURI: string }>>([]);
   const [claimerShares, setClaimerShares] = useState<Record<string, number>>({});
   const [totals, setTotals] = useState<{
@@ -122,8 +122,43 @@ export default function Home() {
     return tokenAddress.trim();
   }, [asset, tokenAddress]);
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8787";
+  // Use localhost (not 127.0.0.1) so GitHub OAuth session cookies work in local dev.
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
   const txDisabled = !wallet;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${apiUrl}/auth/me`, { credentials: "include" });
+        if (!res.ok) {
+          if (!cancelled) setGithubUser(null);
+          return;
+        }
+        const json = (await res.json()) as any;
+        if (!cancelled) setGithubUser(json?.user ?? null);
+      } catch {
+        if (!cancelled) setGithubUser(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUrl]);
+
+  function loginWithGithub() {
+    const returnTo = typeof window !== "undefined" ? window.location.href : "http://localhost:3000";
+    window.location.href = `${apiUrl}/auth/github/start?returnTo=${encodeURIComponent(returnTo)}`;
+  }
+
+  async function logoutGithub() {
+    try {
+      await fetch(`${apiUrl}/auth/logout`, { method: "POST", credentials: "include" });
+    } finally {
+      setGithubUser(null);
+    }
+  }
 
   function pushLog(message: string) {
     setLog((prev) => [...prev, message]);
@@ -295,6 +330,13 @@ export default function Home() {
     fetchMyContribution().catch(() => {
       // Best-effort; errors logged via explicit actions.
     });
+
+    const t = setTimeout(() => {
+      refreshClaims({ silent: true }).catch(() => {
+        // Best-effort; API may be starting or indexer may be catching up.
+      });
+    }, 300);
+    return () => clearTimeout(t);
   }, [derived, asset, tokenAddress, wallet]);
 
   async function fetchTotals() {
@@ -419,6 +461,7 @@ export default function Home() {
       await ensureBountyExists();
 
       const lockSeconds = Math.max(0, Math.floor(Number(lockDays) * 24 * 60 * 60));
+      const pc = getPublicClient();
 
       if (asset === "ETH") {
         const hash = await wc.writeContract({
@@ -430,11 +473,13 @@ export default function Home() {
           account
         });
         pushLog(`fundBountyETH tx: ${hash}`);
+        await pc.waitForTransactionReceipt({ hash });
+        await fetchTotals();
+        await fetchMyContribution();
       } else {
         const t = tokenAddress.trim();
         if (!isAddress(t)) throw new Error("Invalid token address");
 
-        const pc = getPublicClient();
         let decimals = 6;
         try {
           decimals = Number(
@@ -460,6 +505,7 @@ export default function Home() {
           account
         });
         pushLog(`approve tx: ${approveTx}`);
+        await pc.waitForTransactionReceipt({ hash: approveTx });
 
         const fundTx = await wc.writeContract({
           address: contractAddress,
@@ -469,6 +515,9 @@ export default function Home() {
           account
         });
         pushLog(`fundBountyToken tx: ${fundTx}`);
+        await pc.waitForTransactionReceipt({ hash: fundTx });
+        await fetchTotals();
+        await fetchMyContribution();
       }
     } catch (e: any) {
       pushLog(e?.shortMessage ?? e?.message ?? String(e));
@@ -481,6 +530,7 @@ export default function Home() {
       const { contractAddress } = getConfig();
       const wc = getWalletClient();
       const [account] = await wc.getAddresses();
+      const pc = getPublicClient();
 
       const hash = await wc.writeContract({
         address: contractAddress,
@@ -490,6 +540,8 @@ export default function Home() {
         account
       });
       pushLog(`submitClaim tx: ${hash}`);
+      await pc.waitForTransactionReceipt({ hash });
+      await refreshClaims({ silent: true });
     } catch (e: any) {
       pushLog(e?.shortMessage ?? e?.message ?? String(e));
     }
@@ -498,8 +550,7 @@ export default function Home() {
   async function payout() {
     if (!derived) return;
     try {
-      const ghToken = githubUserToken.trim();
-      if (!ghToken) throw new Error("Missing GitHub token (needs repo admin)");
+      if (!githubUser) throw new Error("Not logged in to GitHub. Click 'Login with GitHub' first.");
 
       const recipient = payoutRecipient.trim();
       const { contractAddress } = getConfig();
@@ -519,21 +570,22 @@ export default function Home() {
         }
 
         for (const p of payouts) {
+          const authBody = {
+            bountyId: derived.bountyId,
+            token: currentTotals.token,
+            recipient: p.recipient,
+            amountWei: p.amount.toString()
+          };
           const authRes = await fetch(`${apiUrl}/payout-auth`, {
             method: "POST",
             headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${ghToken}`
+              "Content-Type": "application/json"
             },
-            body: JSON.stringify({
-              bountyId: derived.bountyId,
-              token: currentTotals.token,
-              recipient: p.recipient,
-              amountWei: p.amount.toString()
-            })
+            credentials: "include",
+            body: JSON.stringify(authBody)
           });
           const auth = (await authRes.json()) as any;
-          if (!authRes.ok) throw new Error(auth?.error ?? `payout-auth failed (${authRes.status})`);
+          if (!authRes.ok) throw new Error(`${auth?.error ?? `payout-auth failed (${authRes.status})`} ${auth?.received ? `received=${auth.received}` : ""}`.trim());
 
           const nonce = BigInt(auth.nonce);
           const deadline = BigInt(auth.deadline);
@@ -574,21 +626,22 @@ export default function Home() {
 
       const amount = asset === "ETH" ? parseEther(payoutAmount) : parseUnits(payoutAmount, decimals);
 
+      const authBody = {
+        bountyId: derived.bountyId,
+        token: t,
+        recipient,
+        amountWei: amount.toString()
+      };
       const authRes = await fetch(`${apiUrl}/payout-auth`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${ghToken}`
+          "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          bountyId: derived.bountyId,
-          token: t,
-          recipient,
-          amountWei: amount.toString()
-        })
+        credentials: "include",
+        body: JSON.stringify(authBody)
       });
       const auth = (await authRes.json()) as any;
-      if (!authRes.ok) throw new Error(auth?.error ?? `payout-auth failed (${authRes.status})`);
+      if (!authRes.ok) throw new Error(`${auth?.error ?? `payout-auth failed (${authRes.status})`} ${auth?.received ? `received=${auth.received}` : ""}`.trim());
 
       const nonce = BigInt(auth.nonce);
       const deadline = BigInt(auth.deadline);
@@ -660,7 +713,7 @@ export default function Home() {
     }
   }
 
-  async function refreshClaims() {
+  async function refreshClaims(opts?: { silent?: boolean }) {
     if (!derived) return;
     try {
       const res = await fetch(`${apiUrl}/bounties?bountyId=${encodeURIComponent(derived.bountyId)}`);
@@ -672,9 +725,9 @@ export default function Home() {
         metadataURI: c.metadataURI as string
       }));
       setClaims(cs);
-      pushLog(`claims loaded: ${cs.length}`);
+      if (!opts?.silent) pushLog(`claims loaded: ${cs.length}`);
     } catch (e: any) {
-      pushLog(e?.message ?? String(e));
+      if (!opts?.silent) pushLog(e?.message ?? String(e));
     }
   }
 
@@ -818,12 +871,36 @@ export default function Home() {
 
               <div className="sm:col-span-2 grid gap-3 rounded-xl border border-zinc-800 bg-zinc-950 p-4">
                 <div className="text-sm font-medium text-zinc-100">Admin payout</div>
-                <input
-                  value={githubUserToken}
-                  onChange={(e) => setGithubUserToken(e.target.value)}
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm outline-none focus:border-zinc-600"
-                  placeholder="GitHub token (repo admin) for payout authorization"
-                />
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3">
+                  <div className="text-sm text-zinc-200">
+                    {githubUser ? (
+                      <>
+                        Logged in as <span className="font-medium">{githubUser.login}</span>
+                      </>
+                    ) : (
+                      <>Not logged in</>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    {githubUser ? (
+                      <button
+                        className="rounded-xl bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-950 hover:bg-zinc-200"
+                        onClick={logoutGithub}
+                        type="button"
+                      >
+                        Logout
+                      </button>
+                    ) : (
+                      <button
+                        className="rounded-xl bg-zinc-100 px-3 py-2 text-xs font-medium text-zinc-950 hover:bg-zinc-200"
+                        onClick={loginWithGithub}
+                        type="button"
+                      >
+                        Login with GitHub
+                      </button>
+                    )}
+                  </div>
+                </div>
                 {claimers.length > 1 ? (
                   <>
                     <div className="text-sm text-zinc-400">Payout recipients (split by share)</div>
@@ -861,7 +938,7 @@ export default function Home() {
                       <button
                         className="flex-1 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-zinc-100"
                         onClick={payout}
-                        disabled={txDisabled}
+                        disabled={txDisabled || !githubUser}
                       >
                         Payout
                       </button>
@@ -899,7 +976,7 @@ export default function Home() {
                       <button
                         className="flex-1 rounded-xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-zinc-100"
                         onClick={payout}
-                        disabled={txDisabled}
+                        disabled={txDisabled || !githubUser}
                       >
                         Payout
                       </button>
@@ -961,7 +1038,7 @@ export default function Home() {
               </button>
               <button
                 className="sm:col-span-2 rounded-xl border border-zinc-700 bg-transparent px-4 py-3 text-sm font-medium text-zinc-100 hover:bg-zinc-900"
-                onClick={refreshClaims}
+                onClick={() => refreshClaims()}
               >
                 Refresh claims (from API)
               </button>

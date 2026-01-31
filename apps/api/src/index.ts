@@ -4,6 +4,7 @@ import { startIndexer } from "./indexer/indexer.js";
 import { createPublicClient, http, isAddress, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseGithubIssueUrl } from "./github/parse.js";
+import { getGithubAccessTokenFromRequest } from "./github/oauth.js";
 
 async function main() {
   const env = loadEnv();
@@ -23,25 +24,84 @@ async function main() {
     ]);
 
     app.post("/payout-auth", async (req, reply) => {
+      // Preferred: GitHub OAuth login via HttpOnly session cookie.
+      // Back-compat: allow Authorization: Bearer <token> for local testing / scripts.
       const auth = req.headers.authorization || "";
       const m = auth.match(/^Bearer\s+(.+)$/i);
-      if (!m) return reply.code(401).send({ error: "Missing Authorization: Bearer <github_token>" });
-      const githubToken = m[1].trim();
+      const githubToken = (m?.[1]?.trim() || "") || getGithubAccessTokenFromRequest(req) || "";
+      if (!githubToken) return reply.code(401).send({ error: "Not logged in (use GitHub OAuth login or send Authorization: Bearer <token>)" });
 
-      const body = req.body as any;
-      const bountyId = body?.bountyId as Hex | undefined;
+      // Be tolerant of mis-parsed JSON bodies (e.g. body arrives as a string).
+      const rawBody = req.body as any;
+      let body: any = rawBody;
+      if (typeof body === "string") {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          body = null;
+        }
+      }
+      // Some clients/content-type parsers may deliver JSON as a Buffer/Uint8Array.
+      if (body && typeof body === "object" && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+        try {
+          const text = Buffer.from(body).toString("utf8");
+          body = JSON.parse(text);
+        } catch {
+          req.log.warn(
+            {
+              contentType: req.headers["content-type"],
+              contentLength: req.headers["content-length"]
+            },
+            "Failed to parse JSON buffer body"
+          );
+          body = null;
+        }
+      }
+
+      if (!body || typeof body !== "object") {
+        req.log.warn(
+          {
+            contentType: req.headers["content-type"],
+            contentLength: req.headers["content-length"],
+            bodyType: typeof rawBody
+          },
+          "Invalid /payout-auth body"
+        );
+        return reply.code(400).send({ error: "Invalid JSON body" });
+      }
+
+      const bountyIdRaw = body?.bountyId as unknown;
       const token = body?.token as Address | undefined;
       const recipient = body?.recipient as Address | undefined;
       const amountWeiStr = body?.amountWei as string | undefined;
       const deadlineStr = body?.deadline as string | undefined;
 
-      if (!bountyId || !/^0x[a-fA-F0-9]{64}$/.test(bountyId)) return reply.code(400).send({ error: "Invalid bountyId" });
+      let bountyIdStr = typeof bountyIdRaw === "string" ? bountyIdRaw.trim() : "";
+      // Accept both `0x`-prefixed and bare 32-byte hex strings.
+      if (/^[a-fA-F0-9]{64}$/.test(bountyIdStr)) bountyIdStr = `0x${bountyIdStr}`;
+      if (!/^0x[a-fA-F0-9]{64}$/.test(bountyIdStr)) {
+        req.log.warn({ received: bountyIdRaw, type: typeof bountyIdRaw }, "Invalid bountyId");
+        return reply.code(400).send({ error: "Invalid bountyId", received: bountyIdRaw ?? null });
+      }
+      const bountyId = bountyIdStr as Hex;
       if (!token || !isAddress(token)) return reply.code(400).send({ error: "Invalid token address" });
       if (!recipient || !isAddress(recipient)) return reply.code(400).send({ error: "Invalid recipient address" });
       if (!amountWeiStr || !/^\d+$/.test(amountWeiStr)) return reply.code(400).send({ error: "Invalid amountWei" });
 
       const amountWei = BigInt(amountWeiStr);
       const deadline = deadlineStr && /^\d+$/.test(deadlineStr) ? BigInt(deadlineStr) : BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
+
+      // Helpful debug without leaking secrets.
+      req.log.info(
+        {
+          bountyId,
+          token,
+          recipient,
+          amountWei: amountWei.toString(),
+          deadline: deadline.toString()
+        },
+        "payout-auth request"
+      );
 
       const bounty = (await client.readContract({
         address: env.CONTRACT_ADDRESS as Hex,
@@ -65,15 +125,23 @@ async function main() {
       }
 
       // Verify that the caller is an admin on the repo.
-      const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
-        headers: {
-          Authorization: `Bearer ${githubToken}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "gh-bounties"
-        }
+      const ghHeaders = {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "gh-bounties"
+      } as Record<string, string>;
+
+      // GitHub classic PATs historically used `token`, while fine-grained and OAuth tokens use `Bearer`.
+      let ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: { ...ghHeaders, Authorization: `Bearer ${githubToken}` }
       });
+      if (ghRes.status === 401) {
+        ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+          headers: { ...ghHeaders, Authorization: `token ${githubToken}` }
+        });
+      }
       if (!ghRes.ok) {
         const text = await ghRes.text().catch(() => "");
+        req.log.warn({ status: ghRes.status, text: text.slice(0, 200) }, "GitHub repo permission check failed");
         return reply.code(403).send({ error: `GitHub API error (${ghRes.status}): ${text || ghRes.statusText}` });
       }
       const ghData = (await ghRes.json()) as any;
@@ -132,7 +200,7 @@ async function main() {
     await startIndexer({
       rpcUrl: env.RPC_URL,
       chainId: env.CHAIN_ID,
-      contractAddress: env.CONTRACT_ADDRESS as any,
+      contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
       github
     });
     app.log.info({ contract: env.CONTRACT_ADDRESS, chainId: env.CHAIN_ID }, "indexer started");
