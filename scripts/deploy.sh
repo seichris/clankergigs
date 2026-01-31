@@ -7,6 +7,13 @@ CONTRACTS_DIR="${ROOT_DIR}/contracts"
 RPC_URL="${RPC_URL:?set RPC_URL}"
 PRIVATE_KEY="${PRIVATE_KEY:?set PRIVATE_KEY}"
 
+if [[ -n "${NO_PROXY:-}" ]]; then
+  NO_PROXY="${NO_PROXY},localhost,127.0.0.1,::1"
+else
+  NO_PROXY="localhost,127.0.0.1,::1"
+fi
+export NO_PROXY
+
 CHAIN_ID_HEX="$(curl -s -X POST "${RPC_URL}" -H "content-type: application/json" --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' | jq -r '.result')"
 if [[ -z "${CHAIN_ID_HEX}" || "${CHAIN_ID_HEX}" == "null" ]]; then
   echo "failed to fetch chain id from RPC_URL" 1>&2
@@ -29,4 +36,3 @@ ADDR="$(jq -r '.transactions[] | select(.contractName=="GHBounties") | .contract
 popd >/dev/null
 
 echo "${ADDR}"
-
