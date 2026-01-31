@@ -23,6 +23,24 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
    - `pnpm --filter @gh-bounties/api dev`
    - `pnpm --filter @gh-bounties/web dev`
 
+## Local dev (Sepolia)
+1) Deploy the contract to Sepolia (once per version):
+   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
+   - copy the printed contract address
+2) Set env (root):
+   - copy `.env.example` -> `.env`
+   - set `RPC_URL` to your Sepolia RPC
+   - set `CHAIN_ID=11155111`
+   - set `CONTRACT_ADDRESS` to the deployed address
+3) Set env (web):
+   - copy `apps/web/.env.local.example` -> `apps/web/.env.local`
+   - set `NEXT_PUBLIC_CHAIN_ID=11155111`
+   - set `NEXT_PUBLIC_RPC_URL` to your Sepolia RPC
+   - set `NEXT_PUBLIC_CONTRACT_ADDRESS` to the deployed address
+4) Run API + web:
+   - `pnpm --filter @gh-bounties/api dev`
+   - `pnpm --filter @gh-bounties/web dev`
+
 ## Deploy (Sepolia / Mainnet)
 - Contract deploy prints the deployed address:
   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
