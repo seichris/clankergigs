@@ -41,7 +41,6 @@ contract GHBounties {
 
     error RepoAlreadyRegistered();
     error RepoNotRegistered();
-    error NotMaintainer();
     error BountyAlreadyExists();
     error BountyNotFound();
     error BountyNotOpen();
@@ -49,6 +48,31 @@ contract GHBounties {
     error InvalidToken();
     error RefundNotAvailable();
     error NothingToRefund();
+    error Unauthorized();
+    error InvalidNonce();
+    error SignatureExpired();
+    error InvalidSignature();
+    error DaoNotAvailable();
+    error PayoutModeLocked();
+    error ClaimAuthRequired();
+
+    // ---- EIP-712 payout/refund auth (trusted backend signer) ----
+    bytes32 private constant EIP712_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    bytes32 private constant NAME_HASH = keccak256(bytes("GHBounties"));
+    bytes32 private constant VERSION_HASH = keccak256(bytes("1"));
+
+    bytes32 private constant PAYOUT_TYPEHASH =
+        keccak256("Payout(bytes32 bountyId,address token,address recipient,uint256 amount,uint256 nonce,uint256 deadline)");
+    bytes32 private constant REFUND_TYPEHASH =
+        keccak256("Refund(bytes32 bountyId,address token,address funder,uint256 amount,uint256 nonce,uint256 deadline)");
+    bytes32 private constant CLAIM_TYPEHASH =
+        keccak256("Claim(bytes32 bountyId,address claimer,bytes32 claimHash,uint256 nonce,uint256 deadline)");
+
+    bytes32 public immutable DOMAIN_SEPARATOR;
+    address public immutable payoutAuthorizer; // trusted backend signer
+    address public immutable dao; // optional Gnosis Safe (or other) address for escalation
+    uint64 public immutable daoDelaySeconds;
 
     event RepoRegistered(bytes32 indexed repoHash, address indexed maintainer);
     event RepoMaintainerChanged(bytes32 indexed repoHash, address indexed oldMaintainer, address indexed newMaintainer);
@@ -86,10 +110,23 @@ contract GHBounties {
     mapping(bytes32 bountyId => mapping(uint256 claimId => Claim claim)) public claims;
     mapping(bytes32 bountyId => uint256 nextClaimId) public nextClaimIds;
 
+    mapping(bytes32 bountyId => uint256) public payoutNonces;
+    mapping(bytes32 bountyId => uint256) public refundNonces;
+    mapping(bytes32 bountyId => mapping(address claimer => uint256)) public claimNonces;
+
     uint64 public immutable defaultLockDuration; // seconds (e.g. 7 days)
 
-    constructor(uint64 _defaultLockDuration) {
+    constructor(uint64 _defaultLockDuration, address _payoutAuthorizer, address _dao, uint64 _daoDelaySeconds) {
         defaultLockDuration = _defaultLockDuration;
+        payoutAuthorizer = _payoutAuthorizer;
+        dao = _dao;
+        daoDelaySeconds = _daoDelaySeconds;
+
+        uint256 chainId;
+        assembly {
+            chainId := chainid()
+        }
+        DOMAIN_SEPARATOR = keccak256(abi.encode(EIP712_DOMAIN_TYPEHASH, NAME_HASH, VERSION_HASH, chainId, address(this)));
     }
 
     // -------- Repo management --------
@@ -106,7 +143,7 @@ contract GHBounties {
     function changeMaintainer(bytes32 repoHash, address newMaintainer) external {
         Repo storage r = repos[repoHash];
         if (!r.exists) revert RepoNotRegistered();
-        if (msg.sender != r.maintainer) revert NotMaintainer();
+        if (msg.sender != r.maintainer) revert Unauthorized();
         address old = r.maintainer;
         r.maintainer = newMaintainer;
         emit RepoMaintainerChanged(repoHash, old, newMaintainer);
@@ -119,9 +156,6 @@ contract GHBounties {
     }
 
     function createBounty(bytes32 repoHash, uint256 issueNumber, string calldata metadataURI) external returns (bytes32) {
-        Repo storage r = repos[repoHash];
-        if (!r.exists) revert RepoNotRegistered();
-
         bytes32 bountyId = computeBountyId(repoHash, issueNumber);
         Bounty storage b = bounties[bountyId];
         if (b.createdAt != 0) revert BountyAlreadyExists();
@@ -189,8 +223,29 @@ contract GHBounties {
     // -------- Claims --------
 
     function submitClaim(bytes32 bountyId, string calldata claimMetadataURI) external returns (uint256 claimId) {
+        if (payoutAuthorizer != address(0)) revert ClaimAuthRequired();
         Bounty storage b = bounties[bountyId];
         if (b.createdAt == 0) revert BountyNotFound();
+
+        claimId = nextClaimIds[bountyId]++;
+        claims[bountyId][claimId] =
+            Claim({claimer: msg.sender, createdAt: uint64(block.timestamp), metadataURI: claimMetadataURI});
+        emit ClaimSubmitted(bountyId, claimId, msg.sender, claimMetadataURI);
+    }
+
+    function submitClaimWithAuthorization(
+        bytes32 bountyId,
+        string calldata claimMetadataURI,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature
+    ) external returns (uint256 claimId) {
+        Bounty storage b = bounties[bountyId];
+        if (b.createdAt == 0) revert BountyNotFound();
+
+        bytes32 claimHash = keccak256(bytes(claimMetadataURI));
+        _verifyClaimAuth(bountyId, msg.sender, claimHash, nonce, deadline, signature, payoutAuthorizer);
+        claimNonces[bountyId][msg.sender] = nonce + 1;
 
         claimId = nextClaimIds[bountyId]++;
         claims[bountyId][claimId] =
@@ -201,28 +256,119 @@ contract GHBounties {
     // -------- Maintainer controls --------
 
     function setStatus(bytes32 bountyId, BountyStatus status) external {
-        Bounty storage b = bounties[bountyId];
-        if (b.createdAt == 0) revert BountyNotFound();
-
-        Repo storage r = repos[b.repoHash];
-        if (msg.sender != r.maintainer) revert NotMaintainer();
-
-        b.status = status;
-        emit StatusChanged(bountyId, status);
+        bountyId; // silence unused var warning
+        status;
+        // Legacy maintainer controls are intentionally disabled. Use backend authorization or DAO escalation.
+        revert Unauthorized();
     }
 
     function payout(bytes32 bountyId, address token, address payable recipient, uint256 amount) external {
+        bountyId;
+        token;
+        recipient;
+        amount;
+        // Legacy maintainer payout is intentionally disabled. Use payoutWithAuthorization or daoPayout.
+        revert Unauthorized();
+    }
+
+    /// @notice Maintainer-driven refund (any time, any amount up to contribution).
+    function refund(bytes32 bountyId, address token, address payable funder, uint256 amount) external {
+        bountyId;
+        token;
+        funder;
+        amount;
+        // Legacy maintainer refund is intentionally disabled. Use refundWithAuthorization or daoRefund.
+        revert Unauthorized();
+    }
+
+    // -------- Backend-authorized actions (no repo registration required) --------
+
+    function payoutWithAuthorization(
+        bytes32 bountyId,
+        address token,
+        address payable recipient,
+        uint256 amount,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature
+    ) external {
         Bounty storage b = bounties[bountyId];
         if (b.createdAt == 0) revert BountyNotFound();
-
-        Repo storage r = repos[b.repoHash];
-        if (msg.sender != r.maintainer) revert NotMaintainer();
         if (b.status == BountyStatus.CLOSED) revert BountyNotOpen();
         if (amount == 0 || amount > escrowed[bountyId][token]) revert InvalidAmount();
 
+        _verifyAuth(PAYOUT_TYPEHASH, bountyId, token, recipient, amount, nonce, deadline, signature, payoutAuthorizer);
+        payoutNonces[bountyId] = nonce + 1;
+
+        // Backend-authorized payouts don't decrement individual funder contributions.
+        // Disable timeout withdrawals once any payout occurs for this bounty.
+        anyPayoutOccurred[bountyId] = true;
+        _payout(bountyId, token, recipient, amount);
+    }
+
+    function refundWithAuthorization(
+        bytes32 bountyId,
+        address token,
+        address payable funder,
+        uint256 amount,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature
+    ) external {
+        Bounty storage b = bounties[bountyId];
+        if (b.createdAt == 0) revert BountyNotFound();
+
+        _verifyAuth(REFUND_TYPEHASH, bountyId, token, funder, amount, nonce, deadline, signature, payoutAuthorizer);
+        refundNonces[bountyId] = nonce + 1;
+
+        _refund(bountyId, token, funder, amount);
+    }
+
+    // -------- DAO escalation (Safe can call directly, no dedicated UI required) --------
+
+    function daoPayout(bytes32 bountyId, address token, address payable recipient, uint256 amount) external {
+        _requireDaoEscalated(bountyId);
+        if (amount == 0 || amount > escrowed[bountyId][token]) revert InvalidAmount();
+        // DAO payouts don't decrement individual funder contributions.
+        anyPayoutOccurred[bountyId] = true;
+        _payout(bountyId, token, recipient, amount);
+    }
+
+    function daoRefund(bytes32 bountyId, address token, address payable funder, uint256 amount) external {
+        _requireDaoEscalated(bountyId);
+        _refund(bountyId, token, funder, amount);
+    }
+
+    // -------- Funder-driven payout (no GitHub, no backend) --------
+
+    /// @notice A funder can directly pay out up to their own remaining contribution.
+    /// @dev This is only available if no backend/DAO payout has occurred (since those payouts don't decrement contributions).
+    function funderPayout(bytes32 bountyId, address token, address payable recipient, uint256 amount) external {
+        Bounty storage b = bounties[bountyId];
+        if (b.createdAt == 0) revert BountyNotFound();
+        if (b.status == BountyStatus.CLOSED) revert BountyNotOpen();
+        if (anyPayoutOccurred[bountyId]) revert PayoutModeLocked();
+
+        uint256 contributed = contributions[bountyId][token][msg.sender];
+        if (amount == 0 || amount > contributed) revert InvalidAmount();
+        if (amount > escrowed[bountyId][token]) revert InvalidAmount();
+
+        contributions[bountyId][token][msg.sender] = contributed - amount;
+        _payout(bountyId, token, recipient, amount);
+    }
+
+    // -------- Internal helpers --------
+
+    function _requireDaoEscalated(bytes32 bountyId) internal view {
+        if (dao == address(0) || msg.sender != dao) revert Unauthorized();
+        Bounty storage b = bounties[bountyId];
+        if (b.createdAt == 0) revert BountyNotFound();
+        if (block.timestamp < uint256(b.createdAt) + uint256(daoDelaySeconds)) revert DaoNotAvailable();
+    }
+
+    function _payout(bytes32 bountyId, address token, address payable recipient, uint256 amount) internal {
         escrowed[bountyId][token] -= amount;
         totalPaid[bountyId][token] += amount;
-        anyPayoutOccurred[bountyId] = true;
 
         if (token == NATIVE_TOKEN) {
             (bool ok, ) = recipient.call{value: amount}("");
@@ -235,14 +381,7 @@ contract GHBounties {
         emit PaidOut(bountyId, token, recipient, amount);
     }
 
-    /// @notice Maintainer-driven refund (any time, any amount up to contribution).
-    function refund(bytes32 bountyId, address token, address payable funder, uint256 amount) external {
-        Bounty storage b = bounties[bountyId];
-        if (b.createdAt == 0) revert BountyNotFound();
-
-        Repo storage r = repos[b.repoHash];
-        if (msg.sender != r.maintainer) revert NotMaintainer();
-
+    function _refund(bytes32 bountyId, address token, address payable funder, uint256 amount) internal {
         uint256 contributed = contributions[bountyId][token][funder];
         if (amount == 0 || amount > contributed) revert InvalidAmount();
         if (amount > escrowed[bountyId][token]) revert InvalidAmount();
@@ -259,6 +398,72 @@ contract GHBounties {
         }
 
         emit Refunded(bountyId, token, funder, amount);
+    }
+
+    function _verifyAuth(
+        bytes32 typeHash,
+        bytes32 bountyId,
+        address token,
+        address party,
+        uint256 amount,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature,
+        address expectedSigner
+    ) internal view {
+        if (block.timestamp > deadline) revert SignatureExpired();
+        if (expectedSigner == address(0)) revert Unauthorized();
+
+        if (typeHash == PAYOUT_TYPEHASH) {
+            if (nonce != payoutNonces[bountyId]) revert InvalidNonce();
+        } else if (typeHash == REFUND_TYPEHASH) {
+            if (nonce != refundNonces[bountyId]) revert InvalidNonce();
+        } else {
+            revert InvalidSignature();
+        }
+
+        bytes32 structHash = keccak256(abi.encode(typeHash, bountyId, token, party, amount, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        address recovered = _recoverSigner(digest, signature);
+        if (recovered != expectedSigner) revert InvalidSignature();
+    }
+
+    function _verifyClaimAuth(
+        bytes32 bountyId,
+        address claimer,
+        bytes32 claimHash,
+        uint256 nonce,
+        uint256 deadline,
+        bytes calldata signature,
+        address expectedSigner
+    ) internal view {
+        if (block.timestamp > deadline) revert SignatureExpired();
+        if (expectedSigner == address(0)) revert Unauthorized();
+        if (nonce != claimNonces[bountyId][claimer]) revert InvalidNonce();
+
+        bytes32 structHash = keccak256(abi.encode(CLAIM_TYPEHASH, bountyId, claimer, claimHash, nonce, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        address recovered = _recoverSigner(digest, signature);
+        if (recovered != expectedSigner) revert InvalidSignature();
+    }
+
+    function _recoverSigner(bytes32 digest, bytes calldata signature) internal pure returns (address) {
+        if (signature.length != 65) revert InvalidSignature();
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := calldataload(signature.offset)
+            s := calldataload(add(signature.offset, 32))
+            v := byte(0, calldataload(add(signature.offset, 64)))
+        }
+
+        // EIP-2: enforce low-s
+        if (uint256(s) > 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0) revert InvalidSignature();
+        if (v != 27 && v != 28) revert InvalidSignature();
+        address signer = ecrecover(digest, v, r, s);
+        if (signer == address(0)) revert InvalidSignature();
+        return signer;
     }
 
     // -------- Timeout withdrawal --------
@@ -301,4 +506,3 @@ contract GHBounties {
         return (contributions[bountyId][token][funder], lockedUntil[bountyId][token][funder]);
     }
 }
-

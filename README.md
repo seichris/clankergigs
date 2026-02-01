@@ -1,24 +1,57 @@
 # gh-bounties
 
-Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR links). Repo maintainer approves payouts from escrow.
+Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR links). Payouts are authorized via GitHub login (API verifies repo admin and signs an EIP-712 authorization the contract enforces).
 
 ## Repo layout
 - `contracts/` Foundry project (Solidity)
-- `apps/api/` Fastify + Prisma (indexes contract events; GitHub integration later)
-- `apps/web/` Next.js UI (manual mode: paste issue/PR URLs, call contract via injected wallet)
+- `apps/api/` Fastify + Prisma (indexes contract events; GitHub automation + payout authorization)
+- `apps/web/` Next.js UI (paste issue/PR URLs, call contract via injected wallet)
 - `packages/shared/` shared helpers (repo hash + bounty id)
+
+## Setup
+- Install deps: `pnpm install`
 
 ## Local dev (Anvil)
 1) Start a local chain:
    - `pnpm contracts:anvil`
-2) Deploy the contract (in another terminal):
-   - `pnpm contracts:deploy:local`
-3) Set env:
+2) Set env:
    - copy `.env.example` -> `.env`
+   - set `BACKEND_SIGNER_PRIVATE_KEY` (used by the API to sign payout authorizations)
+     - important: this must match the `payoutAuthorizer` baked into the contract at deploy time (the deploy script derives it from `BACKEND_SIGNER_PRIVATE_KEY`)
+   - set GitHub OAuth env vars (used by “Login with GitHub” in the web UI):
+     - `WEB_ORIGIN=http://localhost:3000`
+     - `GITHUB_OAUTH_CLIENT_ID=...`
+     - `GITHUB_OAUTH_CLIENT_SECRET=...`
+     - `GITHUB_OAUTH_CALLBACK_URL=http://localhost:8787/auth/github/callback`
+3) Deploy the contract (in another terminal):
+   - `pnpm contracts:deploy:local`
    - put the deployed `CONTRACT_ADDRESS` into `.env`
+4) Set web env:
    - copy `apps/web/.env.local.example` -> `apps/web/.env.local`
    - put the same contract address into `apps/web/.env.local`
+   - keep `NEXT_PUBLIC_API_URL=http://localhost:8787` (use `localhost`, not `127.0.0.1`, so the session cookie works)
    - for USDC on Sepolia/mainnet you can paste a token address into the UI, or rely on the auto-fill defaults
+5) Run API + web:
+   - (first time only) `pnpm --filter @gh-bounties/api prisma:migrate`
+   - `pnpm --filter @gh-bounties/api dev`
+   - `pnpm --filter @gh-bounties/web dev`
+
+## Local dev (Sepolia)
+1) Set env (root):
+   - copy `.env.example` -> `.env`
+   - set `RPC_URL` to your Sepolia RPC
+   - set `CHAIN_ID=11155111`
+   - set `BACKEND_SIGNER_PRIVATE_KEY` (used by the API to sign payout authorizations; must match the `payoutAuthorizer` set at deploy time)
+   - set GitHub OAuth env vars (used by “Login with GitHub” in the web UI)
+2) Deploy the contract to Sepolia (once per version):
+   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
+   - copy the printed contract address
+   - set `CONTRACT_ADDRESS` to the deployed address (in `.env`)
+3) Set env (web):
+   - copy `apps/web/.env.local.example` -> `apps/web/.env.local`
+   - set `NEXT_PUBLIC_CHAIN_ID=11155111`
+   - set `NEXT_PUBLIC_RPC_URL` to your Sepolia RPC
+   - set `NEXT_PUBLIC_CONTRACT_ADDRESS` to the deployed address
 4) Run API + web:
    - `pnpm --filter @gh-bounties/api dev`
    - `pnpm --filter @gh-bounties/web dev`
@@ -29,9 +62,13 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
 
 ## Notes
 - On-chain contract cannot index GitHub issues/PRs. The API will index contract events + fetch GitHub data off-chain.
-- GitHub App integration is WIP. The API now:
+- GitHub OAuth login is stored in the API database and lasts 30 days (until expired or you log out). Run the Prisma migration before first use.
+- GitHub automation (labels/comments) is best-effort. The API now:
   - verifies incoming webhooks at `/github/webhook`
-  - can auto-apply bounty labels and post funding comments when it sees on-chain events (requires GitHub App env vars or a `GITHUB_TOKEN` PAT; app creds take precedence)
+  - can auto-apply bounty labels and post issue comments when it sees on-chain events
+    (default: `GITHUB_AUTH_MODE=pat` with a `GITHUB_TOKEN` PAT; switch to App mode with `GITHUB_AUTH_MODE=app`)
 
 ## Roadmap
-- Version B) Authorize payouts via GitHub auth + backend signer (EIP-712), no repo registration required.
+- Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures
+- Add DAO UI (contract supports DAO fallback payout/refund after a delay; the Safe can sign with its own UI).
+- Add a x.com account to tweet out all bounties

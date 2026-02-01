@@ -97,6 +97,7 @@ async function bumpAssetTotals(prisma: any, bountyId: Hex, token: string, delta:
 export async function startIndexer(cfg: IndexerConfig) {
   const prisma = getPrisma();
   if (!isAddress(cfg.contractAddress)) throw new Error("Invalid CONTRACT_ADDRESS");
+  const contractAddress = cfg.contractAddress.toLowerCase() as Hex;
 
   const client = createPublicClient({
     transport: http(cfg.rpcUrl)
@@ -105,18 +106,18 @@ export async function startIndexer(cfg: IndexerConfig) {
   // Backfill from last indexed block (or from current head - 2k as a safe-ish dev default).
   const head = await client.getBlockNumber();
   const state = await prisma.indexerState.findUnique({
-    where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress: cfg.contractAddress } }
+    where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress } }
   });
   const fromBlock = BigInt(state?.lastBlock ?? Math.max(0, Number(head) - 2000));
 
-  await backfill(client, cfg, fromBlock, head);
+  await backfill(client, { ...cfg, contractAddress }, fromBlock, head);
 
   // Live tail.
   client.watchContractEvent({
     abi: ghBountiesAbi,
-    address: cfg.contractAddress,
+    address: contractAddress,
     onLogs: async (logs) => {
-      for (const log of logs) await handleLog(client, cfg, log, { isBackfill: false });
+      for (const log of logs) await handleLog(client, { ...cfg, contractAddress }, log, { isBackfill: false });
     }
   });
 }
@@ -197,7 +198,9 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         },
         update: {
           metadataURI,
-          status: "OPEN"
+          status: "OPEN",
+          chainId: cfg.chainId,
+          contractAddress: cfg.contractAddress
         }
       });
 
@@ -267,6 +270,23 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         create: { bountyId, claimId, claimer, metadataURI, txHash, logIndex, blockNumber },
         update: { bountyId, claimId, claimer, metadataURI, blockNumber }
       });
+
+      if (!opts?.isBackfill) {
+        try {
+          const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+          const issueUrl = bounty?.metadataURI;
+          if (issueUrl) {
+            const lines = [
+              `🧾 Claim submitted (#${claimId})`,
+              `Claimer: ${claimer}`,
+              metadataURI ? `Claim URL: ${metadataURI}` : null
+            ].filter(Boolean) as string[];
+            await postIssueComment({ github: cfg.github ?? null, issueUrl, body: lines.join("\n") });
+          }
+        } catch {
+          // Best-effort: don't block indexing if GitHub comment fails.
+        }
+      }
       break;
     }
     case "StatusChanged": {
@@ -295,6 +315,33 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       });
 
       await bumpAssetTotals(prisma, bountyId, token, { paid: BigInt(amountWei), escrowed: -BigInt(amountWei) });
+
+      if (!opts?.isBackfill) {
+        try {
+          const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+          const issueUrl = bounty?.metadataURI;
+          if (issueUrl) {
+            const meta = await getTokenMeta(client, token);
+            const amountDisplay = formatUnits(BigInt(amountWei), meta.decimals);
+            const tokenLabel =
+              meta.symbol && meta.symbol.length > 0
+                ? meta.symbol
+                : token === NATIVE_TOKEN
+                  ? "ETH"
+                  : `${token.slice(0, 6)}…${token.slice(-4)}`;
+            const lines = [
+              `✅ Payout completed: ${amountDisplay} ${tokenLabel}`,
+              `Recipient: ${recipient}`
+            ];
+            if (token !== NATIVE_TOKEN && (!meta.symbol || meta.symbol.length === 0)) {
+              lines.push(`Token: ${token}`);
+            }
+            await postIssueComment({ github: cfg.github ?? null, issueUrl, body: lines.join("\n") });
+          }
+        } catch {
+          // Best-effort: don't block indexing if GitHub comment fails.
+        }
+      }
       break;
     }
     case "Refunded": {

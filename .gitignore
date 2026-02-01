@@ -7,10 +7,14 @@ out
 .env
 .env.*
 !.env.example
+!apps/web/.env.local.example
 apps/api/.env
 apps/web/.env.local
 
+apps/api/dev.db
 apps/api/prisma/dev.db
+apps/api/prisma/prisma/dev.db
+apps/api/prisma/.env
 
 contracts/out
 contracts/cache
@@ -21,3 +25,4 @@ contracts/broadcast
 .pnpm-store/
 
 key.pem
+.worktrees/

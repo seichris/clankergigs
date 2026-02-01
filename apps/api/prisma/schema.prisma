@@ -38,8 +38,21 @@ model Bounty {
   claims   Claim[]
   payouts  Payout[]
   refunds  Refund[]
+  linkedPullRequests LinkedPullRequest[]
 
   @@unique([repoHash, issueNumber, chainId, contractAddress])
+}
+
+model LinkedPullRequest {
+  id        String   @id @default(cuid())
+  bountyId  String
+  prUrl     String
+  author    String?
+  createdAt DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+
+  @@unique([bountyId, prUrl])
 }
 
 model BountyAsset {
@@ -130,4 +143,16 @@ model IndexerState {
   updatedAt       DateTime @updatedAt
 
   @@unique([chainId, contractAddress])
+}
+
+model GithubSession {
+  id            String   @id
+  accessToken   String
+  userLogin     String
+  userId        Int
+  userAvatarUrl String?
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([expiresAt])
 }
