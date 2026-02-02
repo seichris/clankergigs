@@ -13,9 +13,19 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
   const prisma = getPrisma();
 
   const webOrigin = process.env.WEB_ORIGIN || "http://localhost:3000";
+  const webOrigins = webOrigin
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const allowedOrigins = new Set(webOrigins.length > 0 ? webOrigins : ["http://localhost:3000"]);
+  const corsOrigin = (origin: string | undefined, cb: (err: Error | null, allow?: boolean | string) => void) => {
+    if (!origin) return cb(null, false);
+    if (allowedOrigins.has(origin)) return cb(null, origin);
+    return cb(null, false);
+  };
   // CORS is only needed for browser-based API calls (e.g. /bounties, /payout-auth, /auth/me).
   // Use credentials so the GitHub OAuth session cookie can be sent.
-  await app.register(cors, { origin: webOrigin, credentials: true });
+  await app.register(cors, { origin: corsOrigin, credentials: true });
 
   app.get("/health", async () => ({ ok: true }));
 
