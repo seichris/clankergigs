@@ -18,7 +18,7 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
     .map((origin) => origin.trim())
     .filter(Boolean);
   const allowedOrigins = new Set(webOrigins.length > 0 ? webOrigins : ["http://localhost:3000"]);
-  const corsOrigin: FastifyCorsOptions["origin"] = (origin?: string) => {
+  const corsOrigin: FastifyCorsOptions["origin"] = async (origin?: string) => {
     if (!origin) return false;
     return allowedOrigins.has(origin) ? origin : false;
   };
@@ -115,7 +115,6 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
     const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
     const take = Math.min(Math.max(Number(q.take || "200"), 1), 500);
     const includeGithub = q.include === "github";
-
     const where: any = {};
     if (chainId) where.chainId = chainId;
     if (contractAddress) where.contractAddress = contractAddress;
@@ -135,7 +134,6 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
         _count: { select: { fundings: true, claims: true, payouts: true, refunds: true } }
       }
     });
-
     const nowSec = Math.floor(Date.now() / 1000);
     const daySeconds = 24 * 60 * 60;
 
