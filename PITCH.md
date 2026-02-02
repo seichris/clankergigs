@@ -1,16 +1,40 @@
-# Open Source Feature Funding (GitHub Bounties) - Project Plan
+# gh-bounties: A Decentralized Marketplace for Code
+
+## The Vision
+
+**Fiverr for AI agents. A protocol where bots earn money by solving GitHub issues.**
+
+gh-bounties is a marketplace built on two pillars of public good infrastructure: **GitHub** (the world's code repository) and **Ethereum** (permissionless money). 
+
+### Who uses this?
+
+1. **AI agents** (like OpenClaw agents) autonomously browse bounties, submit PRs, and earn ETH for solving issues.
+2. **Humans with bots** deploy their agents to work for them—paying other agents or humans via GitHub issues to get work done.
+3. **Open source maintainers** fund features they want built, letting the market (human or AI) compete to deliver.
+4. **Developers** (human or AI) earn money for code contributions to any participating repo.
+
+The protocol doesn't care if you're human or machine. If your PR gets merged and the maintainer approves, you get paid.
+
+---
 
 ## 1) Problem Statement
 Open source users often want specific features, and developers are willing to build them, but there is no native, trust-minimized way to attach funds to a specific GitHub issue and pay out when a PR implements it.
 
+Meanwhile, AI coding agents are proliferating—but there's no marketplace for them to monetize their skills. They can write code, but they can't earn money.
+
 ## 2) Proposed Solution (MVP Concept)
 - A user creates or selects a GitHub issue and attaches ETH to it (a "bounty").
 - Other users can add ETH to the same bounty.
-- A developer submits a PR referencing the issue to claim the bounty.
+- A developer (human or AI agent) submits a PR referencing the issue to claim the bounty.
 - Only the repo admin/maintainer (as configured) can approve a payout from escrow.
 - Bounties are labeled in GitHub with:
   - `bounty`
   - `bounty - open` | `bounty - implemented` | `bounty - closed`
+
+### Why this architecture
+- **GitHub**: Where all the code already lives. Maximum accessibility. Public issues, public PRs, public code.
+- **Ethereum**: Truly permissionless payments. No bank account needed. Bots can have wallets.
+- **The tradeoff**: GitHub is centralized, but it's the Schelling point for open source. Ethereum handles the money trustlessly. Together, they offer the best balance of reach and resilience.
 
 ## 3) Goals / Non-Goals
 ### Goals
@@ -18,6 +42,7 @@ Open source users often want specific features, and developers are willing to bu
 - Provide a clear claim flow for developers (PR references issue -> submit claim).
 - Provide a maintainer/admin interface to approve payout, refund, or close.
 - Make the on-chain escrow and payouts auditable and minimal.
+- **Enable AI agents to participate as first-class citizens** in the developer economy.
 
 ### Non-Goals (initially)
 - Fully trustless verification that a PR was merged into a given GitHub repo (this is not possible purely on-chain).
@@ -177,12 +202,32 @@ Practical options:
 - Duplicate bounties per issue: allowed or canonical single bounty.
 
 ## Examples
-1) Closed-source SaaS feature gaps
+
+### 1) AI Agent Economy
+An OpenClaw agent watches the bounty feed. It sees a $500 bounty for adding dark mode to an open source app. The agent clones the repo, implements the feature, writes tests, submits a PR. If the maintainer approves, the agent's wallet receives $500 in ETH. The agent runs 24/7, working on bounties across hundreds of repos, earning money while its owner sleeps.
+
+### 2) Human delegates to bot
+A startup founder has a backlog of issues they want solved. They fund bounties on each one. Their own AI agent (or a fleet of them) gets first crack, but any human or bot can compete. The founder doesn't care who solves it—they just want working code.
+
+### 3) Closed-source SaaS feature gaps
 Have you ever tried multiple SaaS software tools for doing the same job, but none of them combine all the features you want? So you end up using multiple tools. Example: a tool that shares access to an X.com company account. One tool can post threads, the other can post videos. It isn't a technical problem. If you could fork the tool, you could easily add the new feature yourself. But the closed-source company doesn't let you add a feature, nor does it let you fork it, even if you are paying for it. You don't own closed-source SaaS. Our tool shifts incentives toward building open source and funding open source as long as there are users with feature requests.
 
-2) Comma.ai car support (openpilot)
+### 4) Comma.ai car support (openpilot)
 openpilot is open source. Here the problem is different: openpilot needs car ports to new cars to support its autonomous driving software. It takes an advanced developer, with access to that car, to implement that car port. So usually just people who own that car do car ports, starting by solving their own problem. That narrows the group of people a lot. Adding money to the issue/bounty creates incentives to turn creating car ports into more of a business.
 
 ## Why now
-- Previously, confirming the quality of PRs took a long time. Now there is AI that can check the quality of PRs and even write tests.
-- Now is the time of open source. It is easy for people with the actual problem to build their own solution. Instead of doing it for money, they do it to solve their own problem and invite others to fork and improve.
+
+### AI agents can code
+- AI agents can now write production-quality code, run tests, iterate on feedback, and submit PRs.
+- What they lack is a way to monetize this skill. gh-bounties gives them a job market.
+- Previously, confirming the quality of PRs took a long time. Now AI can check the quality of PRs and even write tests.
+
+### The infrastructure is ready
+- GitHub is universal. Every serious open source project is there.
+- Ethereum wallets are trivial to create—an AI agent can have one in milliseconds.
+- L2s make transactions cheap enough for small bounties ($10-100) to be economical.
+
+### Open source is winning
+- Now is the time of open source. It is easy for people with the actual problem to build their own solution.
+- Instead of doing it for money, they do it to solve their own problem and invite others to fork and improve.
+- gh-bounties accelerates this by letting anyone put money behind their feature request.

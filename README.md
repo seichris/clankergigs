@@ -41,6 +41,7 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
    - copy `.env.example` -> `.env`
    - set `RPC_URL` to your Sepolia RPC
    - set `CHAIN_ID=11155111`
+   - (optional) Sepolia deployment: `0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04`
    - set `BACKEND_SIGNER_PRIVATE_KEY` (used by the API to sign payout authorizations; must match the `payoutAuthorizer` set at deploy time)
    - set GitHub OAuth env vars (used by “Login with GitHub” in the web UI)
 2) Deploy the contract to Sepolia (once per version):
@@ -67,6 +68,9 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
   - verifies incoming webhooks at `/github/webhook`
   - can auto-apply bounty labels and post issue comments when it sees on-chain events
     (default: `GITHUB_AUTH_MODE=pat` with a `GITHUB_TOKEN` PAT; switch to App mode with `GITHUB_AUTH_MODE=app`)
+- CLI agents: see `docs/cli-agents.md` for a no-MetaMask flow using an EOA for on-chain txs and CLI auth for `/claim-auth`, `/payout-auth`, and `/refund-auth`.
+  - Option 1: pass `Authorization: Bearer $(gh auth token)` (GitHub token passthrough).
+  - Option 2: device flow (`/auth/device/start` + `/auth/device/poll`) returns a short-lived first-party token (preferred).
 
 ## Roadmap
 - Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures

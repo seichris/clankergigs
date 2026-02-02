@@ -16,6 +16,15 @@ const EnvSchema = z.object({
   GITHUB_OAUTH_CLIENT_SECRET: z.string().optional().or(z.literal("")),
   GITHUB_OAUTH_CALLBACK_URL: z.string().optional().or(z.literal("")),
   GITHUB_OAUTH_SCOPE: z.string().optional().or(z.literal("")),
+  // Used for CLI device-flow sessions (Option 2).
+  // 32-byte hex key (64 hex chars). If unset, device-flow endpoints should be treated as disabled.
+  API_TOKEN_ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/)
+    .optional()
+    .or(z.literal("")),
+  API_SESSION_TTL_HOURS: z.coerce.number().int().positive().default(24),
+  API_SESSION_TOKEN_PREFIX: z.string().optional().or(z.literal("")),
   BACKEND_SIGNER_PRIVATE_KEY: z
     .string()
     .regex(/^0x[a-fA-F0-9]{64}$/)
