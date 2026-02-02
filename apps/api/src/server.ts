@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import cors from "@fastify/cors";
+import cors, { type FastifyCorsOptions } from "@fastify/cors";
 import { getPrisma } from "./db.js";
 import { registerGithubWebhookRoutes } from "./github/webhook.js";
 import { getGithubAccessTokenFromRequest, getGithubUserFromRequest, registerGithubOAuthRoutes } from "./github/oauth.js";
@@ -18,10 +18,9 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
     .map((origin) => origin.trim())
     .filter(Boolean);
   const allowedOrigins = new Set(webOrigins.length > 0 ? webOrigins : ["http://localhost:3000"]);
-  const corsOrigin = (origin: string | undefined, cb: (err: Error | null, allow?: boolean | string) => void) => {
-    if (!origin) return cb(null, false);
-    if (allowedOrigins.has(origin)) return cb(null, origin);
-    return cb(null, false);
+  const corsOrigin: FastifyCorsOptions["origin"] = (origin) => {
+    if (!origin) return false;
+    return allowedOrigins.has(origin) ? origin : false;
   };
   // CORS is only needed for browser-based API calls (e.g. /bounties, /payout-auth, /auth/me).
   // Use credentials so the GitHub OAuth session cookie can be sent.
