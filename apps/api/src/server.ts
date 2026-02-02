@@ -18,7 +18,7 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
     .map((origin) => origin.trim())
     .filter(Boolean);
   const allowedOrigins = new Set(webOrigins.length > 0 ? webOrigins : ["http://localhost:3000"]);
-  const corsOrigin: FastifyCorsOptions["origin"] = (origin) => {
+  const corsOrigin: FastifyCorsOptions["origin"] = (origin?: string) => {
     if (!origin) return false;
     return allowedOrigins.has(origin) ? origin : false;
   };
