@@ -34,6 +34,7 @@ const EnvSchema = z.object({
   GITHUB_PRIVATE_KEY_PEM: z.string().optional().or(z.literal("")),
   GITHUB_TOKEN: z.string().optional().or(z.literal("")),
   GITHUB_BACKFILL_INTERVAL_MINUTES: z.coerce.number().int().min(0).default(60),
+  INDEXER_BACKFILL_BLOCK_CHUNK: z.coerce.number().int().min(1).default(10),
   GITHUB_AUTH_MODE: z
     .preprocess(
       (value) => (typeof value === "string" ? value.toLowerCase() : value),

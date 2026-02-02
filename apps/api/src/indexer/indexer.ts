@@ -10,6 +10,7 @@ type IndexerConfig = {
   chainId: number;
   contractAddress: Hex;
   github?: GithubAuthConfig | null;
+  backfillBlockChunk?: number;
 };
 
 type PublicClient = ReturnType<typeof createPublicClient>;
@@ -129,20 +130,29 @@ async function backfill(
   toBlock: bigint
 ) {
   const prisma = getPrisma();
-  const logs = await client.getContractEvents({
-    abi: ghBountiesAbi,
-    address: cfg.contractAddress,
-    fromBlock,
-    toBlock
-  });
+  if (fromBlock > toBlock) return;
+  const chunkSize = BigInt(Math.max(1, cfg.backfillBlockChunk ?? 10));
 
-  for (const log of logs) await handleLog(client, cfg, log, { isBackfill: true });
+  let cursor = fromBlock;
+  while (cursor <= toBlock) {
+    const chunkEnd = cursor + chunkSize - 1n > toBlock ? toBlock : cursor + chunkSize - 1n;
+    const logs = await client.getContractEvents({
+      abi: ghBountiesAbi,
+      address: cfg.contractAddress,
+      fromBlock: cursor,
+      toBlock: chunkEnd
+    });
 
-  await prisma.indexerState.upsert({
-    where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress: cfg.contractAddress } },
-    create: { chainId: cfg.chainId, contractAddress: cfg.contractAddress, lastBlock: Number(toBlock) },
-    update: { lastBlock: Number(toBlock) }
-  });
+    for (const log of logs) await handleLog(client, cfg, log, { isBackfill: true });
+
+    await prisma.indexerState.upsert({
+      where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress: cfg.contractAddress } },
+      create: { chainId: cfg.chainId, contractAddress: cfg.contractAddress, lastBlock: Number(chunkEnd) },
+      update: { lastBlock: Number(chunkEnd) }
+    });
+
+    cursor = chunkEnd + 1n;
+  }
 }
 
 async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opts?: { isBackfill?: boolean }) {
@@ -204,11 +214,13 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         }
       });
 
-      // Best-effort label sync if metadataURI is a GitHub issue URL.
-      try {
-        await syncBountyLabels({ github: cfg.github ?? null, issueUrl: metadataURI, status: "OPEN" });
-      } catch {
-        // Don't break indexing on GitHub failures.
+      if (!opts?.isBackfill) {
+        // Best-effort label sync if metadataURI is a GitHub issue URL.
+        try {
+          await syncBountyLabels({ github: cfg.github ?? null, issueUrl: metadataURI, status: "OPEN" });
+        } catch {
+          // Don't break indexing on GitHub failures.
+        }
       }
       break;
     }
@@ -294,11 +306,13 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const status = statusFromEnum(Number(log.args.status as bigint));
       await prisma.bounty.update({ where: { bountyId }, data: { status } });
 
-      try {
-        const b = await prisma.bounty.findUnique({ where: { bountyId } });
-        if (b?.metadataURI) await syncBountyLabels({ github: cfg.github ?? null, issueUrl: b.metadataURI, status });
-      } catch {
-        // best-effort
+      if (!opts?.isBackfill) {
+        try {
+          const b = await prisma.bounty.findUnique({ where: { bountyId } });
+          if (b?.metadataURI) await syncBountyLabels({ github: cfg.github ?? null, issueUrl: b.metadataURI, status });
+        } catch {
+          // best-effort
+        }
       }
       break;
     }

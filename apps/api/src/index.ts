@@ -349,7 +349,8 @@ async function main() {
       rpcUrl: env.RPC_URL,
       chainId: env.CHAIN_ID,
       contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
-      github
+      github,
+      backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK
     });
     app.log.info({ contract: env.CONTRACT_ADDRESS, chainId: env.CHAIN_ID }, "indexer started");
   } else {
