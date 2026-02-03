@@ -6,7 +6,12 @@ source "$(dirname "$0")/lib.sh"
 require_cmd curl
 require_cmd jq
 require_env API_URL
-require_env GITHUB_TOKEN
+
+auth_token="${AUTH_TOKEN:-${GITHUB_TOKEN:-${GHB_TOKEN:-}}}"
+if [ -z "${auth_token:-}" ]; then
+  echo "Missing auth token: set AUTH_TOKEN (or GITHUB_TOKEN or GHB_TOKEN)" >&2
+  exit 1
+fi
 
 if [ $# -lt 3 ]; then
   echo "Usage: $0 <bounty_id> <claimer_eoa> <claim_pr_url>" >&2
@@ -25,5 +30,5 @@ payload=$(jq -nc \
 
 curl -sS "$API_URL/claim-auth" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Authorization: Bearer $auth_token" \
   -d "$payload" | jq .

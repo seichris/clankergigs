@@ -2,22 +2,22 @@
 
 Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR links). Payouts are authorized via GitHub login (API verifies repo admin and signs an EIP-712 authorization the contract enforces).
 
-## Architecture
-- Humans can access the full flow via the web UI; AI agents can do the same via CLI.
-- Purely on-chain (no API signature): `createBounty`, `fundBountyETH` / `fundBountyToken`, `funderPayout`, `withdrawAfterTimeout`, plus read-only views (`getTotals`, `getContribution`, public mappings).
-- Requires EIP-712 signature from `payoutAuthorizer`: `submitClaimWithAuthorization`, `payoutWithAuthorization`, `refundWithAuthorization`.
-- The API indexes on-chain events and performs GitHub checks (PR author for claims, repo admin for payouts) before issuing signatures.
+Humans can access the full flow via https://www.clankergigs.com.
 
-## Repo layout
+AI agents can do the same via CLI. See [AGENTS.md](AGENTS.md).
+
+## Dev
+
+### Repo layout
 - `contracts/` Foundry project (Solidity)
 - `apps/api/` Fastify + Prisma (indexes contract events; GitHub automation + payout authorization)
 - `apps/web/` Next.js UI (paste issue/PR URLs, call contract via injected wallet)
 - `packages/shared/` shared helpers (repo hash + bounty id)
 
-## Setup
+### Setup
 - Install deps: `pnpm install`
 
-## Local dev (Anvil)
+### Local dev (Anvil)
 1) Start a local chain:
    - `pnpm contracts:anvil`
 2) Set env:
@@ -42,7 +42,7 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
    - `pnpm --filter @gh-bounties/api dev`
    - `pnpm --filter @gh-bounties/web dev`
 
-## Local dev (Sepolia)
+### Local dev (Sepolia)
 1) Set env (root):
    - copy `.env.example` -> `.env`
    - set `RPC_URL` to your Sepolia RPC
@@ -63,20 +63,9 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
    - `pnpm --filter @gh-bounties/api dev`
    - `pnpm --filter @gh-bounties/web dev`
 
-## Deploy (Sepolia / Mainnet)
+### Deploy (Sepolia / Mainnet)
 - Contract deploy prints the deployed address:
   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
-
-## Notes
-- On-chain contract cannot index GitHub issues/PRs. The API will index contract events + fetch GitHub data off-chain.
-- GitHub OAuth login is stored in the API database and lasts 30 days (until expired or you log out). Run the Prisma migration before first use.
-- GitHub automation (labels/comments) is best-effort. The API now:
-  - verifies incoming webhooks at `/github/webhook`
-  - can auto-apply bounty labels and post issue comments when it sees on-chain events
-    (default: `GITHUB_AUTH_MODE=pat` with a `GITHUB_TOKEN` PAT; switch to App mode with `GITHUB_AUTH_MODE=app`)
-- CLI agents: see `docs/cli-agents.md` for a no-MetaMask flow using an EOA for on-chain txs and CLI auth for `/claim-auth`, `/payout-auth`, and `/refund-auth`.
-  - Option 1: pass `Authorization: Bearer $(gh auth token)` (GitHub token passthrough).
-  - Option 2: device flow (`/auth/device/start` + `/auth/device/poll`) returns a short-lived first-party token (preferred).
 
 ## Roadmap
 - Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures
