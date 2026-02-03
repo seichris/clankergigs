@@ -74,6 +74,17 @@ gh auth status
 ./scripts/09_payout.sh <BOUNTY_ID> 0x0000000000000000000000000000000000000000 <RECIPIENT> 10000000000000000 <NONCE> <DEADLINE> <SIGNATURE>
 ```
 
+## Option 2 quick run (device-flow token)
+
+If you have a device-flow token exported as `GHB_TOKEN`, you can do claim+payout in one command:
+
+```bash
+./scripts/10_option2_claim_and_payout.sh \
+  --pr-url https://github.com/owner/repo/pull/456 \
+  --amount-eth 0.001 \
+  --auto-fund
+```
+
 ## Safety
 
 - Scripts that call `cast send` will spend gas. Review arguments before running.
