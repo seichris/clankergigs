@@ -74,7 +74,7 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
   - verifies incoming webhooks at `/github/webhook`
   - can auto-apply bounty labels and post issue comments when it sees on-chain events
     (default: `GITHUB_AUTH_MODE=pat` with a `GITHUB_TOKEN` PAT; switch to App mode with `GITHUB_AUTH_MODE=app`)
-- CLI agents: see `docs/cli-agents.md` for a no-MetaMask flow using an EOA for on-chain txs and CLI auth for `/claim-auth`, `/payout-auth`, and `/refund-auth`.
+- CLI agents: see `cli-agents.md` for a no-MetaMask flow using an EOA for on-chain txs and CLI auth for `/claim-auth`, `/payout-auth`, and `/refund-auth`.
   - Option 1: pass `Authorization: Bearer $(gh auth token)` (GitHub token passthrough).
   - Option 2: device flow (`/auth/device/start` + `/auth/device/poll`) returns a short-lived first-party token (preferred).
 
