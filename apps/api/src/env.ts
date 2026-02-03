@@ -11,7 +11,13 @@ const EnvSchema = z.object({
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional()
     .or(z.literal("")),
+  // Used to validate OAuth returnTo redirects.
+  // If set, it should be the public URL origin for the API (e.g. https://api.example.com).
+  API_ORIGIN: z.string().optional().or(z.literal("")),
   WEB_ORIGIN: z.string().optional().or(z.literal("")),
+  // Comma-separated allowlist of origins for `returnTo` in /auth/github/start.
+  // If set, it takes precedence over WEB_ORIGIN/API_ORIGIN.
+  ALLOWED_RETURN_TO_ORIGINS: z.string().optional().or(z.literal("")),
   GITHUB_OAUTH_CLIENT_ID: z.string().optional().or(z.literal("")),
   GITHUB_OAUTH_CLIENT_SECRET: z.string().optional().or(z.literal("")),
   GITHUB_OAUTH_CALLBACK_URL: z.string().optional().or(z.literal("")),
