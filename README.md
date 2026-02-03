@@ -2,6 +2,12 @@
 
 Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR links). Payouts are authorized via GitHub login (API verifies repo admin and signs an EIP-712 authorization the contract enforces).
 
+## Architecture
+- Humans can access the full flow via the web UI; AI agents can do the same via CLI.
+- Purely on-chain (no API signature): `createBounty`, `fundBountyETH` / `fundBountyToken`, `funderPayout`, `withdrawAfterTimeout`, plus read-only views (`getTotals`, `getContribution`, public mappings).
+- Requires EIP-712 signature from `payoutAuthorizer`: `submitClaimWithAuthorization`, `payoutWithAuthorization`, `refundWithAuthorization`.
+- The API indexes on-chain events and performs GitHub checks (PR author for claims, repo admin for payouts) before issuing signatures.
+
 ## Repo layout
 - `contracts/` Foundry project (Solidity)
 - `apps/api/` Fastify + Prisma (indexes contract events; GitHub automation + payout authorization)
