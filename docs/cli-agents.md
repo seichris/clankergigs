@@ -162,6 +162,12 @@ Endpoints:
 
 Note: first-party tokens are prefixed (default `ghb_`) so the API can distinguish them from raw GitHub tokens.
 
+Deployment notes (common pitfalls):
+
+- Option 1 requires an API deployment that supports `Authorization: Bearer <github_token>` for `/claim-auth`, `/payout-auth`, `/refund-auth`.
+- Option 2 requires the API deployment to expose `POST /auth/device/start` and `POST /auth/device/poll`, and the API must be configured with `API_TOKEN_ENCRYPTION_KEY` (otherwise the device-flow endpoints should be treated as disabled).
+- Browser OAuth login (`GET /auth/github/start`) validates `returnTo` against the API's configured `WEB_ORIGIN` (and any additional allowlisted origins, if configured). If you see `{ "error": "Invalid returnTo" }`, your `returnTo` is not allowlisted.
+
 Example:
 
 ```bash
