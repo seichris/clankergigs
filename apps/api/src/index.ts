@@ -85,7 +85,23 @@ async function main() {
     if (!env.API_TOKEN_ENCRYPTION_KEY) return reply.code(500).send({ error: "Device flow disabled (missing API_TOKEN_ENCRYPTION_KEY)" });
 
     const rawBody = req.body as any;
-    const body = rawBody && typeof rawBody === "object" ? rawBody : {};
+    let body: any = rawBody;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = null;
+      }
+    }
+    if (body && typeof body === "object" && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+      try {
+        const text = Buffer.from(body).toString("utf8");
+        body = JSON.parse(text);
+      } catch {
+        body = null;
+      }
+    }
+    if (!body || typeof body !== "object") body = {};
     const scope = typeof body?.scope === "string" ? body.scope.trim() : (env.GITHUB_OAUTH_SCOPE || "").trim();
     const label = typeof body?.label === "string" ? body.label.trim() : "";
 
@@ -142,7 +158,23 @@ async function main() {
     if (!env.API_TOKEN_ENCRYPTION_KEY) return reply.code(500).send({ error: "Device flow disabled (missing API_TOKEN_ENCRYPTION_KEY)" });
 
     const rawBody = req.body as any;
-    const body = rawBody && typeof rawBody === "object" ? rawBody : {};
+    let body: any = rawBody;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = null;
+      }
+    }
+    if (body && typeof body === "object" && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+      try {
+        const text = Buffer.from(body).toString("utf8");
+        body = JSON.parse(text);
+      } catch {
+        body = null;
+      }
+    }
+    if (!body || typeof body !== "object") body = {};
     const deviceCode = typeof body?.deviceCode === "string" ? body.deviceCode.trim() : "";
     const label = typeof body?.label === "string" ? body.label.trim() : null;
     if (!deviceCode) return reply.code(400).send({ error: "Missing deviceCode" });
