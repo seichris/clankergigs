@@ -5,33 +5,80 @@ This doc describes how an AI agent can use gh-bounties entirely from a terminal,
 - opening issues/PRs under the GitHub account that authenticated in the CLI, and
 - funding/claiming/paying out bounties on-chain.
 
-This assumes **Backend authorization mode** is enabled:
+**Backend authorization mode is always enabled** in our current deployments, including Sepolia. That means:
 
 - the contract is deployed with `payoutAuthorizer != address(0)`, and
 - the API is configured with `BACKEND_SIGNER_PRIVATE_KEY` matching that `payoutAuthorizer`.
+
+As a result, **claim, payout, and refund operations always require an API-issued signature**.
 
 ## Roles and identities
 
 An agent operates with two independent identities:
 
 1) **EVM identity (EOA)**: used to sign and send on-chain transactions.
-2) **GitHub identity**: used to open issues/PRs and to prove permissions to the API for claim/payout authorization.
+2) **GitHub identity**: used to open issues/PRs and to prove permissions to the API for claim/payout/refund authorization.
 
 GitHub attribution (who opened the issue/PR) is determined by the GitHub identity that created it, not by the EVM identity.
 
-## Prerequisites
+## Prerequisites (Clawbot)
+
+API and webapp configuration is assumed to already be set correctly. Clawbot only needs:
 
 - A working RPC endpoint and deployed contract:
-  - `RPC_URL`, `CHAIN_ID`, `CONTRACT_ADDRESS`
+  - `RPC_URL`
+  - `CHAIN_ID=11155111`
+  - `CONTRACT_ADDRESS=0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04`
 - An EOA private key for the agent to sign transactions:
   - `PRIVATE_KEY`
-- The API running and reachable:
-  - `API_URL` (example: `http://localhost:8787`)
 - GitHub CLI authenticated as the desired GitHub account:
   - `gh auth login`
-- If using Option 2 (device flow):
-  - set `GITHUB_OAUTH_CLIENT_ID` (and optionally `GITHUB_OAUTH_SCOPE`)
-  - set `API_TOKEN_ENCRYPTION_KEY` (32-byte hex)
+
+## Flow diagram (CLI view)
+
+```mermaid
+sequenceDiagram
+  participant GH as GitHub
+  participant API
+  participant Chain
+
+  rect rgb(240, 248, 255)
+    Note over GH,Chain: Open a bounty
+    Note over GH: Funder opens issue
+    Note over Chain: Read bounties(bountyId) via eth_call
+    Note over Chain: If missing, createBounty(...)
+    Note over Chain: fundBounty(...)
+    opt Optional payout to PR submitter
+      Note over GH: Contributor opens PR
+      Note over API: /claim-auth (verify PR author)
+      Note over Chain: submitClaimWithAuthorization(...)
+      Note over API: /payout-auth (verify repo admin)
+      Note over Chain: payoutWithAuthorization(...)
+    end
+  end
+
+  rect rgb(245, 255, 240)
+    Note over GH,Chain: "Making money" (contributor flow)
+    Note over API: Browse bounties via GET /issues or /bounties
+    Note over GH: Fork repo and open PR
+    Note over API: /claim-auth
+    Note over Chain: submitClaimWithAuthorization(...)
+    Note over API: /payout-auth
+    Note over Chain: payoutWithAuthorization(...)
+  end
+
+  rect rgb(255, 248, 240)
+    Note over GH,Chain: Payout authorities
+    alt Funder self-payout or refund
+      Note over Chain: funderPayout(...) or withdrawAfterTimeout(...)
+    else Repo admin (backend-authorized)
+      Note over API: /payout-auth or /refund-auth (admin check)
+      Note over Chain: payoutWithAuthorization(...) or refundWithAuthorization(...)
+    else DAO (if configured)
+      Note over Chain: daoPayout(...) or daoRefund(...) after delay
+    end
+  end
+```
 
 ## GitHub (issue/PR) flow (pure CLI)
 
@@ -48,18 +95,31 @@ The GitHub user logged in via `gh auth login` is the user that will appear as th
 
 The agent uses its EOA to send transactions. The minimal contract calls are:
 
-- Create bounty (optional): `createBounty(repoHash, issueNumber, metadataURI)`
+- Read bounty existence (free `eth_call`): `bounties(bountyId)` and check `createdAt`
+- Create bounty (if missing): `createBounty(repoHash, issueNumber, metadataURI)`
 - Fund bounty: `fundBountyETH(bountyId, lockDurationSeconds)` or `fundBountyToken(...)`
-- Submit claim (Backend authorization mode): `submitClaimWithAuthorization(...)`
-- Payout (Backend authorization mode): `payoutWithAuthorization(...)`
-
-“Optional” means any actor can do it once, and funding requires it to have happened already.
+- Submit claim: `submitClaimWithAuthorization(...)`
+- Payout: `payoutWithAuthorization(...)`
+- Refund: `refundWithAuthorization(...)`
 
 Best CLI behavior is “create-if-missing”:
 
 - Compute `bountyId` and check if it exists (read `bounties(bountyId)` on-chain, or `GET /bounties?bountyId=...`).
 - If `createdAt == 0`, call `createBounty(repoHash, issueNumber, issueUrl)` then fund.
 - If it exists, just fund.
+
+## Bounty creation flow (pure CLI)
+
+1. Compute `repoHash` and `bountyId`.
+2. Read `bounties(bountyId)` via `eth_call` and check `createdAt`.
+3. If `createdAt == 0`, call `createBounty(repoHash, issueNumber, metadataURI)`.
+4. If it already exists, skip creation.
+
+## Funding flow (pure CLI)
+
+1. Ensure the bounty exists (use the create-if-missing flow above).
+2. Fund with ETH: call `fundBountyETH(bountyId, lockDurationSeconds)` and send `msg.value`.
+3. Fund with ERC-20: `approve` then call `fundBountyToken(bountyId, token, amount, lockDurationSeconds)`.
 
 Computing IDs:
 
@@ -78,7 +138,7 @@ You can source this token from GitHub CLI:
 
 Important: treat this as a secret. Don’t print it in logs.
 
-## Option 2 (recommended) — connect GitHub once (device flow) + first-party API token
+## Option 2 (recommended if you have access to a browser) — connect GH once + first-party API token
 
 Instead of sending a GitHub token on every request, a CLI can support a one-time “connect GitHub” device flow against **your** OAuth app.
 
@@ -89,16 +149,10 @@ High-level flow:
 3) The CLI polls `POST /auth/device/poll` until it receives a short-lived **first-party** token.
 4) The CLI calls `/claim-auth`, `/payout-auth`, and `/refund-auth` with `Authorization: Bearer <your_token>`.
 
-Pros:
+Pros/Cons:
 
-- GitHub token isn’t passed around by bots after login (lower leak risk).
-- You can revoke sessions centrally and enforce rate limits per bot/user.
-- Cleaner UX for agents (no “paste token” step; no PAT scope confusion).
-
-Cons:
-
-- More backend work (device flow, token storage/encryption, session issuance/refresh/revoke).
-- More operational surface area (session lifecycle, abuse controls).
+- Pros: cleaner UX (no token copy/paste) and lower risk of leaking a GitHub token in bot logs.
+- Cons: requires a one-time browser step and depends on the API's token/session system being available.
 
 Endpoints (Option 2):
 
@@ -130,9 +184,9 @@ while true; do
 done
 ```
 
-## Claim authorization (Backend mode)
+## Claim authorization
 
-When `payoutAuthorizer != 0x0`, the contract requires a backend signature for claim submission.
+Claim submission requires an API signature.
 
 1) Create a PR on GitHub (CLI) and get its URL (used as `claimMetadataURI`).
 2) Ask the API for a claim signature:
@@ -158,7 +212,7 @@ The API checks:
 
 ## Payout authorization (repo admin approval)
 
-Repo admin approval is done off-chain via the API, then enforced on-chain by the signature.
+As a repo admin, you approve payout off-chain via the API, then it is enforced on-chain by the signature.
 
 1) Ask the API for a payout signature:
 
@@ -180,7 +234,7 @@ The API checks the authenticated GitHub user is an **admin** on the repo referen
 
 ## Refund authorization (repo admin approval)
 
-Refunds are also backend-authorized in Backend authorization mode.
+As a repo admin, if you want to pay back the funders, refunds are backend-authorized: request a signature from the API, then call `refundWithAuthorization(...)` on-chain.
 
 1) Ask the API for a refund signature:
 
@@ -198,14 +252,14 @@ curl -sS "$API_URL/refund-auth" \
 
 2) Send `refundWithAuthorization(...)` on-chain using the returned `{ nonce, deadline, signature }`.
 
-## CLI-complete API surface (current vs. recommended)
+## CLI-complete API surface
 
 ### Already implemented (useful for bots)
 
 - `GET /health` (liveness)
 - `GET /issues` (indexed bounty/issue list; optional GitHub enrichment)
 - `GET /bounties` (fetch a bounty by `bountyId`, or filter by `repoHash`/`issueNumber`)
-- `POST /claim-auth` (signs claim authorization; now supports `Authorization: Bearer <github_token>`)
+- `POST /claim-auth` (signs claim authorization; supports `Authorization: Bearer <github_token>`)
 - `POST /payout-auth` (signs payout authorization; supports cookie session and `Authorization: Bearer <github_token>`)
 - `POST /refund-auth` (signs refund authorization; supports cookie session and `Authorization: Bearer <github_token>`)
 - `POST /auth/device/start` / `POST /auth/device/poll` (Option 2)
@@ -218,28 +272,27 @@ Optional quality-of-life endpoints (bots can also compute locally):
 
 ## Notes / limitations
 
-- This doc focuses on payout+claim signatures. Funding and bounty creation don’t require the API.
 - DAO escalation (`daoPayout` / `daoRefund`) is available if the contract was deployed with `dao` set and `daoDelaySeconds` configured.
+- Some RPC providers (e.g. free-tier) restrict `eth_getLogs` block ranges. If the API fails to boot on a remote chain, lower `INDEXER_BACKFILL_BLOCK_CHUNK` (e.g. `10`).
 
 ## What can be done purely on Ethereum vs. via the API?
 
+Bounty creation and funding flows are described above. This section lists the other on-chain actions vs. API-authorized actions.
+
 ### Purely on-chain (CLI can call contract directly)
 
-- Create bounty: `createBounty(...)`
-- Fund bounty: `fundBountyETH(...)` / `fundBountyToken(...)`
 - Read totals and contributions: `getTotals(...)` / `getContribution(...)` (and public mappings)
 - Funder escape hatches:
   - `funderPayout(...)` (only up to the caller’s contribution; disabled after any backend/DAO payout)
   - `withdrawAfterTimeout(...)` (after lock expiry; disabled after any payout)
 - DAO escalation (if configured): `daoPayout(...)` / `daoRefund(...)` (after `daoDelaySeconds`)
 
-### Requires the API (Backend authorization mode)
+### Requires the API (backend authorization always on)
 
 These contract calls require an EIP-712 signature from `payoutAuthorizer`:
 
 - Claim submission: `submitClaimWithAuthorization(...)` (API: `/claim-auth`)
 - Payout execution: `payoutWithAuthorization(...)` (API: `/payout-auth`)
-- Refund execution: `refundWithAuthorization(...)` (recommended API: `/refund-auth`)
- - Refund execution: `refundWithAuthorization(...)` (API: `/refund-auth`)
+- Refund execution: `refundWithAuthorization(...)` (API: `/refund-auth`)
 
 The API is also where GitHub checks happen (repo admin check for payouts; PR author check for claims). Those checks cannot be done on-chain.

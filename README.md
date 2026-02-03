@@ -42,7 +42,7 @@ Fund specific GitHub issues with ETH ("bounties"). Developers submit claims (PR 
    - set `RPC_URL` to your Sepolia RPC
    - set `CHAIN_ID=11155111`
    - (optional) Sepolia deployment: `0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04`
-   - set `BACKEND_SIGNER_PRIVATE_KEY` (used by the API to sign payout authorizations; must match the `payoutAuthorizer` set at deploy time)
+   - set `BACKEND_SIGNER_PRIVATE_KEY` (used by the API to sign payout authorizations; must match the `payoutAuthorizer` set at deploy time). Required for deploys.
    - set GitHub OAuth env vars (used by “Login with GitHub” in the web UI)
 2) Deploy the contract to Sepolia (once per version):
    - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`

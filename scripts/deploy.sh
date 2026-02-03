@@ -6,6 +6,13 @@ CONTRACTS_DIR="${ROOT_DIR}/contracts"
 
 RPC_URL="${RPC_URL:?set RPC_URL}"
 PRIVATE_KEY="${PRIVATE_KEY:?set PRIVATE_KEY}"
+BACKEND_SIGNER_PRIVATE_KEY="${BACKEND_SIGNER_PRIVATE_KEY:-}"
+PAYOUT_AUTHORIZER="${PAYOUT_AUTHORIZER:-}"
+
+if [[ -z "${BACKEND_SIGNER_PRIVATE_KEY}" && -z "${PAYOUT_AUTHORIZER}" ]]; then
+  echo "Missing BACKEND_SIGNER_PRIVATE_KEY or PAYOUT_AUTHORIZER (backend authorization mode requires one of these)" 1>&2
+  exit 1
+fi
 
 if [[ -n "${NO_PROXY:-}" ]]; then
   NO_PROXY="${NO_PROXY},localhost,127.0.0.1,::1"
