@@ -7,7 +7,12 @@ require_cmd curl
 require_cmd jq
 require_cmd cast
 require_env API_URL
-require_env GITHUB_TOKEN
+
+auth_token="${AUTH_TOKEN:-${GITHUB_TOKEN:-${GHB_TOKEN:-}}}"
+if [ -z "${auth_token:-}" ]; then
+  echo "Missing auth token: set AUTH_TOKEN (or GITHUB_TOKEN or GHB_TOKEN)" >&2
+  exit 1
+fi
 
 if [ $# -lt 4 ]; then
   echo "Usage: $0 <bounty_id> <token_addr> <recipient> <amount_eth>" >&2
@@ -31,5 +36,5 @@ payload=$(jq -nc \
 
 curl -sS "$API_URL/payout-auth" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $GITHUB_TOKEN" \
+  -H "Authorization: Bearer $auth_token" \
   -d "$payload" | jq .
