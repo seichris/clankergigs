@@ -27,9 +27,16 @@ export const GATEWAY_TESTNET_CONTRACTS: GatewayContracts = {
   minterContract: "0x0022222ABE238Cc2f7e7eF3Fdd8a49AfaE42F35B"
 };
 
+// Gateway-supported testnet chains (source chains for funding).
+// Domain IDs from: https://developers.circle.com/gateway/references/supported-blockchains
 export const GATEWAY_DOMAIN_BY_CHAIN_ID: Record<number, { domain: number; label: string }> = {
   11155111: { domain: 0, label: "Ethereum Sepolia" },
-  84532: { domain: 6, label: "Base Sepolia" }
+  43113: { domain: 1, label: "Avalanche Fuji" },
+  84532: { domain: 6, label: "Base Sepolia" },
+  57054: { domain: 13, label: "Sonic Blaze Testnet" },
+  4801: { domain: 14, label: "World Chain Sepolia" },
+  1328: { domain: 16, label: "Sei Atlantic" },
+  998: { domain: 19, label: "HyperEVM Testnet" },
 };
 
 export const ARC_TESTNET: TreasuryArcConfig = {
