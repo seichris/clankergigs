@@ -79,9 +79,8 @@ function UnlockBar({ schedule }: { schedule: UnlockSchedule | null }) {
 
   return (
     <div className="flex-1">
-      <div className="relative h-2 rounded-full bg-muted">
+      <div className="flex h-2 overflow-hidden rounded-full bg-muted">
         {days.map((entry) => {
-          const left = maxDay > 0 ? Math.min(100, (entry.day / maxDay) * 100) : 0;
           let opacity = 0.7;
           if (total > 0n) {
             try {
@@ -91,13 +90,7 @@ function UnlockBar({ schedule }: { schedule: UnlockSchedule | null }) {
               opacity = 0.7;
             }
           }
-          return (
-            <span
-              key={entry.day}
-              className="absolute top-0 h-2 w-[2px] rounded-full bg-foreground"
-              style={{ left: `${left}%`, opacity }}
-            />
-          );
+          return <span key={entry.day} className="h-full flex-1 bg-foreground" style={{ opacity }} />;
         })}
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
@@ -279,16 +272,6 @@ export function createIssueColumns(options: {
           </div>
         );
       },
-    },
-    {
-      id: "identifiers",
-      header: "Identifiers",
-      cell: ({ row }) => (
-        <div className="flex flex-col text-xs font-mono text-muted-foreground">
-          <span>repo: {shortHex(row.original.repoHash)}</span>
-          <span>bounty: {shortHex(row.original.bountyId)}</span>
-        </div>
-      ),
     },
     {
       id: "linkedPrs",
