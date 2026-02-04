@@ -50,6 +50,14 @@ function formatAssetValue(value: string, decimals: number) {
   }
 }
 
+function truncateDecimals(value: string, maxDecimals: number) {
+  const dot = value.indexOf(".");
+  if (dot === -1) return value;
+  const decimals = value.slice(dot + 1);
+  if (decimals.length <= maxDecimals) return value;
+  return `${value.slice(0, dot)}.${decimals.slice(0, maxDecimals)}`;
+}
+
 function assetTotals(issue: IssueRow, token: string) {
   return issue.assets.find((asset) => asset.token.toLowerCase() === token.toLowerCase());
 }
@@ -106,12 +114,12 @@ function assetLine(
   decimals: number,
   schedule: UnlockSchedule | null
 ) {
-  const amount = totals ? formatAssetValue(totals.escrowedWei, decimals) : "0";
+  const amount = totals ? truncateDecimals(formatAssetValue(totals.escrowedWei, decimals), 4) : "0";
   return (
     <div className="flex items-center gap-3">
+      <span className="text-xs text-muted-foreground tabular-nums">{amount}</span>
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <UnlockBar schedule={schedule} />
-      <span className="text-xs text-muted-foreground">{amount}</span>
     </div>
   );
 }

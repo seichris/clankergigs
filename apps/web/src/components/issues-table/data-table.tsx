@@ -88,7 +88,6 @@ function ExpandedIssueRow({
   const timeline = issue.activityTimeline;
   const startDate = timeline ? new Date(timeline.startDate) : new Date(issue.createdAt);
   const endDate = timeline ? new Date(timeline.endDate) : new Date();
-  const maxDay = timeline?.maxDay || Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000)));
   const days = timeline?.days ?? [];
   const linkedPrs = issue.linkedPullRequests ?? [];
 
@@ -240,23 +239,21 @@ function ExpandedIssueRow({
             <span>Linked PRs: {issue.counts.linkedPrs ?? 0}</span>
           </div>
           <div className="space-y-2">
-            <div className="relative h-2 rounded-full bg-muted">
-              {days.map((day) => {
-                const events = sortedDayEvents(day);
-                const count = events.length;
-                if (count === 0) return null;
-                return events.map((event, idx) => {
-                  const withinDay = (idx + 1) / (count + 1);
-                  const left = Math.min(100, ((day.day + withinDay) / maxDay) * 100);
-                  return (
-                    <span
-                      key={`${day.day}-${event.type}-${idx}`}
-                      className={`absolute top-0 h-2 w-[2px] rounded-full ${activityColor(event.type)}`}
-                      style={{ left: `${left}%` }}
-                    />
-                  );
-                });
-              })}
+            <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+              {days
+                .flatMap((day) => sortedDayEvents(day).map((event) => ({ day: day.day, event })))
+                .sort((a, b) => {
+                  const aTime = new Date(a.event.timestamp).getTime();
+                  const bTime = new Date(b.event.timestamp).getTime();
+                  if (aTime !== bTime) return aTime - bTime;
+                  return a.day - b.day;
+                })
+                .map(({ event }, idx) => (
+                  <span
+                    key={`${event.timestamp}-${event.type}-${idx}`}
+                    className={`h-full flex-1 ${activityColor(event.type)}`}
+                  />
+                ))}
             </div>
             <div className="flex justify-between text-[10px] text-muted-foreground">
               <span>{formatDate(startDate)}</span>
