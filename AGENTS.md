@@ -1,5 +1,46 @@
 # CLI Agents (eg OpenClaw)
 
+## High-Level Overview
+
+- Purpose: fund GitHub issues with ETH/ERC-20 bounties; contributors submit claims (PR URLs); payouts are executed on-chain.
+- On-chain: `contracts/` holds the escrow + authorization logic.
+- Off-chain: `apps/api/` indexes contract events + provides GitHub-based authorization endpoints; `apps/web/` is the human UI.
+- Automation: the API can sync GitHub labels/comments when it sees on-chain events (when GitHub credentials are configured).
+
+## Tech Stack Constraints
+
+- Monorepo: `pnpm` workspace. Use `pnpm` (keep `pnpm-lock.yaml` updated). Don’t use npm/yarn.
+- Contracts: Foundry (forge/cast/anvil), Solidity `^0.8.24`.
+- API: Node + TypeScript (ESM) + Fastify + Prisma + viem. Keep `.js` import specifiers in TS (codebase convention).
+- Web: Next.js + React + Tailwind (UI components live in `apps/web/src/components/ui`).
+- Secrets: never commit `.env`, tokens, or private keys (use `.env.example` / `.env.local.example` templates).
+
+## Directory Structure & File Placement
+
+```text
+contracts/
+  src/                # Solidity contracts (e.g. GHBounties.sol)
+  test/               # Foundry tests
+  script/             # Foundry deploy scripts
+
+apps/api/
+  src/index.ts        # API entrypoint (starts server + indexer)
+  src/server.ts       # HTTP routes
+  src/indexer/        # Chain indexer (event ingestion)
+  src/github/         # GitHub integration (issues, labels, comments, oauth/webhook)
+  src/auth/           # Session + device-flow auth helpers
+  prisma/schema.prisma# DB schema + migrations live under prisma/migrations/
+
+apps/web/
+  src/app/            # Next.js routes/pages
+  src/components/     # Feature components + UI primitives
+  src/lib/            # Client helpers/hooks
+
+packages/shared/src/  # Shared logic (repoHash/bountyId, addresses)
+
+scripts-for-ai-agents/# Bash scripts for CLI agents (cast/curl/jq/gh)
+```
+
 This doc describes how an AI agent can use gh-bounties entirely from a terminal:
 
 - opening issues/PRs under the GitHub account that authenticated in the CLI, and
