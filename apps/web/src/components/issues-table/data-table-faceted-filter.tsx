@@ -38,11 +38,13 @@ export function DataTableFacetedFilter<TData, TValue>({
   highlight,
 }: DataTableFacetedFilterProps<TData, TValue>) {
   const facets = column?.getFacetedUniqueValues();
+  const filterValue = column?.getFilterValue();
   const internalValues = React.useMemo(() => {
     if (selectedValues) return new Set(selectedValues);
-    const raw = (column?.getFilterValue() as string[]) || [];
-    return new Set(raw);
-  }, [selectedValues, column]);
+    if (!filterValue) return new Set<string>();
+    const list = Array.isArray(filterValue) ? filterValue : [String(filterValue)];
+    return new Set(list);
+  }, [selectedValues, filterValue]);
 
   const setValues = React.useCallback(
     (values: Set<string>) => {
