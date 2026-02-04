@@ -76,16 +76,13 @@ export function DataTableToolbar({
     });
   }, [githubUser, table]);
   const [ownerHighlightActive, setOwnerHighlightActive] = React.useState(false);
+  const [ownerHighlightDismissed, setOwnerHighlightDismissed] = React.useState(false);
 
   React.useEffect(() => {
-    if (!highlightOwner) {
-      setOwnerHighlightActive(false);
-      return;
+    if (highlightOwner && !ownerHighlightDismissed) {
+      setOwnerHighlightActive(true);
     }
-    setOwnerHighlightActive(true);
-    const timer = setTimeout(() => setOwnerHighlightActive(false), 5000);
-    return () => clearTimeout(timer);
-  }, [highlightOwner]);
+  }, [highlightOwner, ownerHighlightDismissed]);
 
   return (
     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -127,6 +124,12 @@ export function DataTableToolbar({
               title="Repo owner"
               options={ownerOptions}
               highlight={ownerHighlightActive}
+              onOpenChange={(open) => {
+                if (open) {
+                  setOwnerHighlightActive(false);
+                  setOwnerHighlightDismissed(true);
+                }
+              }}
             />
           </div>
         ) : null}

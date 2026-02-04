@@ -34,8 +34,6 @@ import { usdcAddressForChainId } from "@gh-bounties/shared";
 import { DataTableToolbar } from "./toolbar";
 import type { ActivityDay, ActivityEvent, IssueRow } from "./types";
 import type { GithubUser } from "@/lib/hooks/useGithubUser";
-import { ClaimBountyDialog } from "@/components/claim-bounty-dialog";
-import { PayoutDialog } from "@/components/payout-dialog";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -66,12 +64,16 @@ function ExpandedIssueRow({
   walletAddress,
   onClaim,
   onPayout,
+  onAdminPayout,
+  onTreasury,
 }: {
   issue: IssueRow;
   showUsdc: boolean;
   walletAddress: Address | null;
   onClaim: (issue: IssueRow) => void;
-  onPayout: (issue: IssueRow, mode: "repo" | "funder" | "dao") => void;
+  onPayout: (issue: IssueRow, mode: "funder" | "dao") => void;
+  onAdminPayout: (issue: IssueRow) => void;
+  onTreasury?: (issue: IssueRow) => void;
 }) {
   const usdc = usdcAddressForChainId(issue.chainId);
   const assets = showUsdc || !usdc
@@ -279,9 +281,14 @@ function ExpandedIssueRow({
           <div className="text-xs uppercase text-muted-foreground">Payouts</div>
           {walletAddress ? (
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => onPayout(issue, "repo")}>
-                Repo owner payout
+              <Button size="sm" onClick={() => onAdminPayout(issue)}>
+                Admin payout
               </Button>
+              {onTreasury ? (
+                <Button variant="outline" size="sm" onClick={() => onTreasury(issue)}>
+                  Treasury
+                </Button>
+              ) : null}
               <Button variant="outline" size="sm" onClick={() => onPayout(issue, "funder")}>
                 Funder payout
               </Button>
@@ -305,10 +312,12 @@ export function IssuesDataTable({
   walletAddress,
   myFundingOnly,
   setMyFundingOnly,
-  onClaimed,
   githubUser,
-  onGithubLogin,
   onAddIssue,
+  onClaim,
+  onPayout,
+  onAdminPayout,
+  onTreasury,
 }: {
   columns: ColumnDef<IssueRow>[];
   data: IssueRow[];
@@ -316,10 +325,12 @@ export function IssuesDataTable({
   walletAddress: Address | null;
   myFundingOnly: boolean;
   setMyFundingOnly: (next: boolean) => void;
-  onClaimed?: () => void;
   githubUser: GithubUser | null;
-  onGithubLogin: () => void;
   onAddIssue: () => void;
+  onClaim: (issue: IssueRow) => void;
+  onPayout: (issue: IssueRow, mode: "funder" | "dao") => void;
+  onAdminPayout: (issue: IssueRow) => void;
+  onTreasury?: (issue: IssueRow) => void;
 }) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -329,11 +340,6 @@ export function IssuesDataTable({
     labels: false,
     owner: false,
   });
-  const [claimIssue, setClaimIssue] = React.useState<IssueRow | null>(null);
-  const [claimOpen, setClaimOpen] = React.useState(false);
-  const [payoutIssue, setPayoutIssue] = React.useState<IssueRow | null>(null);
-  const [payoutOpen, setPayoutOpen] = React.useState(false);
-  const [payoutMode, setPayoutMode] = React.useState<"repo" | "funder" | "dao">("repo");
 
   const table = useReactTable({
     data,
@@ -388,31 +394,6 @@ export function IssuesDataTable({
     table.getRow(rowId).toggleExpanded();
   }, [table]);
 
-  const handleClaimOpen = React.useCallback(
-    (issue: IssueRow) => {
-      if (!walletAddress) {
-        window.alert("Connect a wallet to submit a claim.");
-        return;
-      }
-      setClaimIssue(issue);
-      setClaimOpen(true);
-    },
-    [walletAddress]
-  );
-
-  const handlePayoutOpen = React.useCallback(
-    (issue: IssueRow, mode: "repo" | "funder" | "dao") => {
-      if (!walletAddress) {
-        window.alert("Connect a wallet to submit payouts.");
-        return;
-      }
-      setPayoutIssue(issue);
-      setPayoutMode(mode);
-      setPayoutOpen(true);
-    },
-    [walletAddress]
-  );
-
   return (
     <div className="space-y-4">
       <DataTableToolbar
@@ -457,8 +438,10 @@ export function IssuesDataTable({
                           issue={row.original}
                           showUsdc={showUsdc}
                           walletAddress={walletAddress}
-                          onClaim={handleClaimOpen}
-                          onPayout={handlePayoutOpen}
+                          onClaim={onClaim}
+                          onPayout={onPayout}
+                          onAdminPayout={onAdminPayout}
+                          onTreasury={onTreasury}
                         />
                       </TableCell>
                     </TableRow>
@@ -488,41 +471,6 @@ export function IssuesDataTable({
           </Button>
         </div>
       </div>
-      <ClaimBountyDialog
-        open={claimOpen}
-        onOpenChange={(next) => {
-          setClaimOpen(next);
-          if (!next) setClaimIssue(null);
-        }}
-        walletAddress={walletAddress}
-        bountyId={claimIssue?.bountyId ?? null}
-        issueUrl={claimIssue?.issueUrl ?? null}
-        apiUrl={process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787"}
-        githubUser={githubUser}
-        onGithubLogin={onGithubLogin}
-        onClaimed={onClaimed}
-      />
-      <PayoutDialog
-        open={payoutOpen}
-        onOpenChange={(next) => {
-          setPayoutOpen(next);
-          if (!next) setPayoutIssue(null);
-        }}
-        walletAddress={walletAddress}
-        bountyId={payoutIssue?.bountyId ?? null}
-        issueUrl={payoutIssue?.issueUrl ?? null}
-        apiUrl={process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787"}
-        mode={payoutMode}
-        escrowedByToken={
-          payoutIssue
-            ? payoutIssue.assets.reduce<Record<string, string>>((acc, asset) => {
-                acc[asset.token.toLowerCase()] = asset.escrowedWei;
-                return acc;
-              }, {})
-            : undefined
-        }
-        onPayouted={onClaimed}
-      />
     </div>
   );
 }

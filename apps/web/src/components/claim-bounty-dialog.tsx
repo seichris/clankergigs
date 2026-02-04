@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ghBountiesAbi } from "@/lib/abi";
-import { getConfig, getPublicClient, getWalletClient } from "@/lib/wallet";
+import { ensureWalletChain, getConfig, getPublicClient, getWalletClient } from "@/lib/wallet";
 import type { GithubUser } from "@/lib/hooks/useGithubUser";
 
 export function ClaimBountyDialog({
@@ -89,6 +89,7 @@ export function ClaimBountyDialog({
       const signature = auth.signature as `0x${string}`;
 
       const { contractAddress } = getConfig();
+      await ensureWalletChain(Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337"));
       const wc = getWalletClient();
       const [account] = await wc.getAddresses();
       const pc = getPublicClient();

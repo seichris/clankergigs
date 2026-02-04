@@ -11,10 +11,14 @@ out
 apps/api/.env
 apps/web/.env.local
 
-apps/api/dev.db
-apps/api/prisma/dev.db
-apps/api/prisma/prisma/dev.db
+apps/api/dev*.db
+apps/api/prisma/**/*.db
+apps/api/prisma/**/*.db-journal
+apps/api/prisma/**/*.db-shm
+apps/api/prisma/**/*.db-wal
 apps/api/prisma/.env
+
+apps/api/src/generated/prisma
 
 contracts/out
 contracts/cache
