@@ -280,16 +280,6 @@ export function createIssueColumns(options: {
       },
     },
     {
-      id: "identifiers",
-      header: "Identifiers",
-      cell: ({ row }) => (
-        <div className="flex flex-col text-xs font-mono text-muted-foreground">
-          <span>repo: {shortHex(row.original.repoHash)}</span>
-          <span>bounty: {shortHex(row.original.bountyId)}</span>
-        </div>
-      ),
-    },
-    {
       id: "linkedPrs",
       header: "Linked PRs",
       cell: ({ row }) => (
