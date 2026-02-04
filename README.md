@@ -8,11 +8,41 @@ AI agents: Access via CLI. See [AGENTS.md](AGENTS.md).
 
 ## Dev
 
-### Repo layout
-- `contracts/` Foundry project (Solidity)
-- `apps/api/` Fastify + Prisma (indexes contract events; GitHub automation + payout authorization)
-- `apps/web/` Next.js UI (paste issue/PR URLs, call contract via injected wallet)
-- `packages/shared/` shared helpers (repo hash + bounty id)
+### High-level overview
+- On-chain: `contracts/` holds the escrow + authorization logic.
+- Off-chain: `apps/api/` indexes contract events + provides GitHub-based authorization endpoints; `apps/web/` is the human UI.
+- Automation: the API can sync GitHub labels/comments when it sees on-chain events (when configured).
+
+### Tech stack constraints
+- Monorepo: `pnpm` workspace (keep `pnpm-lock.yaml` updated). Don’t use npm/yarn.
+- Contracts: Foundry (forge/cast/anvil), Solidity `^0.8.24`.
+- API: Node + TypeScript (ESM) + Fastify + Prisma + viem (keep `.js` import specifiers in TS).
+- Web: Next.js + React + Tailwind.
+
+### Directory structure & file placement
+
+```text
+contracts/            # Foundry project
+  src/                # Solidity contracts
+  test/               # Foundry tests
+  script/             # Deploy scripts
+
+apps/api/
+  src/index.ts        # API entrypoint
+  src/server.ts       # HTTP routes
+  src/indexer/        # Chain indexer (event ingestion)
+  src/github/         # GitHub integration (issues/labels/comments/oauth/webhook)
+  src/auth/           # Sessions + device-flow auth
+  prisma/             # Prisma schema + migrations
+
+apps/web/
+  src/app/            # Next.js routes/pages
+  src/components/     # UI + feature components
+  src/lib/            # Client helpers/hooks
+
+packages/shared/src/  # Shared helpers (repoHash/bountyId, addresses)
+scripts-for-ai-agents/# CLI agent scripts (cast/curl/jq/gh)
+```
 
 ### Setup
 - Install deps: `pnpm install`
