@@ -10,12 +10,31 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ghBountiesAbi } from "@/lib/abi";
+import { isProbablyEnsName } from "@/lib/ens";
+import { useEnsAddressForName, useEnsPrimaryName } from "@/lib/hooks/useEns";
 import { getConfig, getPublicClient, getWalletClient } from "@/lib/wallet";
 import { usdcAddressForChainId } from "@gh-bounties/shared";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 type Mode = "repo" | "funder" | "dao";
+
+type PayoutAuthResponse = {
+  nonce: string;
+  deadline: string;
+  signature: Hex;
+  error?: string;
+  received?: unknown;
+};
+
+function errorMessage(err: unknown) {
+  if (err && typeof err === "object") {
+    const maybe = err as { shortMessage?: unknown; message?: unknown };
+    if (typeof maybe.shortMessage === "string" && maybe.shortMessage) return maybe.shortMessage;
+    if (typeof maybe.message === "string" && maybe.message) return maybe.message;
+  }
+  return String(err);
+}
 
 export function PayoutDialog({
   open,
@@ -43,6 +62,17 @@ export function PayoutDialog({
   const [amount, setAmount] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+
+  const recipientTrimmed = recipient.trim();
+  const recipientIsAddress = Boolean(recipientTrimmed && isAddress(recipientTrimmed));
+  const recipientLooksEns = Boolean(recipientTrimmed && !recipientIsAddress && isProbablyEnsName(recipientTrimmed));
+  const { address: ensResolvedAddress, isLoading: ensIsResolving, error: ensResolveError } = useEnsAddressForName(
+    recipientLooksEns ? recipientTrimmed : null
+  );
+  const { name: reverseEnsName, isLoading: ensReverseIsResolving } = useEnsPrimaryName(
+    recipientIsAddress ? (recipientTrimmed as Address) : null
+  );
+  const resolvedRecipient = (recipientIsAddress ? recipientTrimmed : ensResolvedAddress) as Address | null;
 
   React.useEffect(() => {
     if (open) {
@@ -76,7 +106,13 @@ export function PayoutDialog({
     }
   })();
 
-  const canSubmit = Boolean(walletAddress && bountyId && recipient && amount && (!usdcAddress ? asset === "ETH" : true));
+  const canSubmit = Boolean(
+    walletAddress &&
+      bountyId &&
+      resolvedRecipient &&
+      amount &&
+      (!usdcAddress ? asset === "ETH" : true)
+  );
 
   async function submit() {
     if (!walletAddress) return;
@@ -84,8 +120,8 @@ export function PayoutDialog({
       setError("Missing bounty id.");
       return;
     }
-    if (!recipient.trim() || !isAddress(recipient.trim())) {
-      setError("Enter a valid recipient address.");
+    if (!resolvedRecipient) {
+      setError(recipientLooksEns ? "ENS name did not resolve to an address." : "Enter a valid recipient address.");
       return;
     }
     if (!amount || Number(amount) <= 0) {
@@ -118,15 +154,19 @@ export function PayoutDialog({
           body: JSON.stringify({
             bountyId,
             token,
-            recipient: recipient.trim(),
+            recipient: resolvedRecipient,
             amountWei: amountWei.toString(),
           }),
         });
-        const auth = (await authRes.json()) as any;
+        const auth = (await authRes.json()) as Partial<PayoutAuthResponse>;
         if (!authRes.ok) {
           throw new Error(
             `${auth?.error ?? `payout-auth failed (${authRes.status})`} ${auth?.received ? `received=${auth.received}` : ""}`.trim()
           );
+        }
+
+        if (!auth.nonce || !auth.deadline || !auth.signature) {
+          throw new Error("Invalid payout-auth response.");
         }
 
         const nonce = BigInt(auth.nonce);
@@ -137,7 +177,7 @@ export function PayoutDialog({
           address: contractAddress,
           abi: ghBountiesAbi,
           functionName: "payoutWithAuthorization",
-          args: [bountyId as Hex, token as Address, recipient.trim() as Address, amountWei, nonce, deadline, signature],
+          args: [bountyId as Hex, token as Address, resolvedRecipient, amountWei, nonce, deadline, signature],
           account,
         });
         await pc.waitForTransactionReceipt({ hash });
@@ -146,7 +186,7 @@ export function PayoutDialog({
           address: contractAddress,
           abi: ghBountiesAbi,
           functionName: "funderPayout",
-          args: [bountyId as Hex, token as Address, recipient.trim() as Address, amountWei],
+          args: [bountyId as Hex, token as Address, resolvedRecipient, amountWei],
           account,
         });
         await pc.waitForTransactionReceipt({ hash });
@@ -155,7 +195,7 @@ export function PayoutDialog({
           address: contractAddress,
           abi: ghBountiesAbi,
           functionName: "daoPayout",
-          args: [bountyId as Hex, token as Address, recipient.trim() as Address, amountWei],
+          args: [bountyId as Hex, token as Address, resolvedRecipient, amountWei],
           account,
         });
         await pc.waitForTransactionReceipt({ hash });
@@ -163,8 +203,8 @@ export function PayoutDialog({
 
       onOpenChange(false);
       onPayouted?.();
-    } catch (err: any) {
-      setError(err?.shortMessage ?? err?.message ?? String(err));
+    } catch (err: unknown) {
+      setError(errorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -199,10 +239,31 @@ export function PayoutDialog({
             <Label htmlFor="recipient">Recipient</Label>
             <Input
               id="recipient"
-              placeholder="0x..."
+              placeholder="0x... or alice.eth"
               value={recipient}
               onChange={(event) => setRecipient(event.target.value)}
             />
+            {recipientLooksEns ? (
+              <div className="text-xs text-muted-foreground">
+                {ensIsResolving ? (
+                  "Resolving ENS name…"
+                ) : ensResolveError ? (
+                  <span className="text-amber-600">{ensResolveError}</span>
+                ) : ensResolvedAddress ? (
+                  <>Resolves to: <span className="font-mono">{ensResolvedAddress}</span></>
+                ) : (
+                  "No address found for this ENS name."
+                )}
+              </div>
+            ) : recipientIsAddress ? (
+              reverseEnsName ? (
+                <div className="text-xs text-muted-foreground">
+                  Reverse ENS: <span className="font-mono">{reverseEnsName}</span>
+                </div>
+              ) : ensReverseIsResolving ? (
+                <div className="text-xs text-muted-foreground">Reverse-resolving ENS name…</div>
+              ) : null
+            ) : null}
           </div>
           <div className="grid gap-2">
             <Label htmlFor="amount">Amount</Label>

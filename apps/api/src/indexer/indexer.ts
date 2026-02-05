@@ -1,12 +1,12 @@
 import { getPrisma } from "../db.js";
 import { ghBountiesAbi } from "./abi.js";
-import { createPublicClient, http, isAddress, formatUnits, type Hex } from "viem";
+import { createPublicClient, fallback, http, isAddress, formatUnits, type Hex } from "viem";
 import { syncBountyLabels } from "../github/labels.js";
 import { postIssueComment } from "../github/comments.js";
 import type { GithubAuthConfig } from "../github/appAuth.js";
 
 type IndexerConfig = {
-  rpcUrl: string;
+  rpcUrls: string[];
   chainId: number;
   contractAddress: Hex;
   github?: GithubAuthConfig | null;
@@ -98,10 +98,12 @@ async function bumpAssetTotals(prisma: any, bountyId: Hex, token: string, delta:
 export async function startIndexer(cfg: IndexerConfig) {
   const prisma = getPrisma();
   if (!isAddress(cfg.contractAddress)) throw new Error("Invalid CONTRACT_ADDRESS");
+  if (!cfg.rpcUrls || cfg.rpcUrls.length === 0) throw new Error("RPC URL(s) not configured");
   const contractAddress = cfg.contractAddress.toLowerCase() as Hex;
 
+  const transport = cfg.rpcUrls.length > 1 ? fallback(cfg.rpcUrls.map((url) => http(url))) : http(cfg.rpcUrls[0]!);
   const client = createPublicClient({
-    transport: http(cfg.rpcUrl)
+    transport
   });
 
   // Backfill from last indexed block (or from current head - 2k as a safe-ish dev default).

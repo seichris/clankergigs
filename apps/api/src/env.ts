@@ -4,7 +4,13 @@ import dotenv from "dotenv";
 const EnvSchema = z.object({
   // Keep DB under prisma/ to avoid clutter and match .gitignore.
   DATABASE_URL: z.string().min(1).default("file:./prisma/dev.db"),
-  RPC_URL: z.string().default("http://127.0.0.1:8545"),
+  // Primary RPC URL (local dev, custom chains, etc.). If unset/empty, we fall back to chain-specific RPCs.
+  RPC_URL: z.string().optional().or(z.literal("")).default(""),
+  // Chain-specific Ethereum RPCs (used when CHAIN_ID matches and RPC_URL is unset/empty).
+  RPC_URLS_ETHEREUM_MAINNET: z.string().optional().or(z.literal("")).default(""),
+  RPC_URLS_ETHEREUM_SEPOLIA: z.string().optional().or(z.literal("")).default(""),
+  RPC_URL_ETHEREUM_MAINNET: z.string().optional().or(z.literal("")).default(""),
+  RPC_URL_ETHEREUM_SEPOLIA: z.string().optional().or(z.literal("")).default(""),
   CHAIN_ID: z.coerce.number().int().positive().default(31337),
   CONTRACT_ADDRESS: z
     .string()
@@ -60,7 +66,16 @@ const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8787)
 });
 
-export type Env = z.infer<typeof EnvSchema>;
+type ParsedEnv = z.infer<typeof EnvSchema>;
+
+export type Env = ParsedEnv & { RPC_URLS: string[] };
+
+function parseRpcUrls(value: string | undefined) {
+  return (value || "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+}
 
 export function loadEnv(): Env {
   dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || "../../.env" });
@@ -71,5 +86,20 @@ export function loadEnv(): Env {
     console.error(parsed.error.flatten().fieldErrors);
     throw new Error("Invalid environment variables");
   }
-  return parsed.data;
+  const env = parsed.data;
+
+  let rpcUrls = parseRpcUrls(env.RPC_URL);
+  if (rpcUrls.length === 0) {
+    if (env.CHAIN_ID === 1) {
+      rpcUrls = parseRpcUrls(env.RPC_URLS_ETHEREUM_MAINNET);
+      if (rpcUrls.length === 0) rpcUrls = parseRpcUrls(env.RPC_URL_ETHEREUM_MAINNET);
+    } else if (env.CHAIN_ID === 11155111) {
+      rpcUrls = parseRpcUrls(env.RPC_URLS_ETHEREUM_SEPOLIA);
+      if (rpcUrls.length === 0) rpcUrls = parseRpcUrls(env.RPC_URL_ETHEREUM_SEPOLIA);
+    }
+  }
+
+  const rpcUrl = rpcUrls[0] || "";
+
+  return { ...env, RPC_URL: rpcUrl, RPC_URLS: rpcUrls };
 }
