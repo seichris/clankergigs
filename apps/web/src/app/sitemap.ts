@@ -9,7 +9,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     {
       url: `${siteOrigin}/`,
-      changefreq: "daily",
+      changeFrequency: "daily",
       priority: 1,
     },
   ];

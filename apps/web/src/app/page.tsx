@@ -176,9 +176,9 @@ export default function Home() {
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6">
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
-            <h1 className="text-3xl font-semibold tracking-tight">Issues with bounties</h1>
+            {/* <h1 className="text-3xl font-semibold tracking-tight">Issues with bounties</h1> */}
             <p className="text-sm text-muted-foreground">
-              Track every issue that has an active or historical bounty, then fund or top up in a few clicks.
+              Fund issues. Claim rewards. Built for humans and AI Agents (start at <a href="https://github.com/seichris/gh-bounties/blob/main/AGENTS.md" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">AGENTS.md</a>).
             </p>
           </div>
           <div className="flex items-center gap-3">
