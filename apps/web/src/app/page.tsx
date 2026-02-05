@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Moon, Sun } from "lucide-react";
+import { ChevronDown, Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -37,8 +37,26 @@ function addressGradientStyle(addr: string) {
   } as React.CSSProperties;
 }
 
+function chainLabel(chainId: number) {
+  if (chainId === 1) return "Mainnet";
+  if (chainId === 11155111) return "Sepolia";
+  if (chainId === 31337) return "Local";
+  return `Chain ${chainId}`;
+}
+
+function errorMessage(err: unknown) {
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === "string" && msg.length > 0) return msg;
+  }
+  return String(err);
+}
+
 export default function Home() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
+  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const mainnetWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET || "").trim();
+  const sepoliaWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA || "").trim();
   const { address, hasProvider, connect } = useWallet();
   const { user, login, logout } = useGithubUser(apiUrl);
   const { theme, setTheme, mounted } = useTheme();
@@ -61,8 +79,8 @@ export default function Home() {
       if (!res.ok) throw new Error(`Failed to load issues (${res.status})`);
       const json = (await res.json()) as { issues?: IssueRow[] };
       setIssues(json?.issues ?? []);
-    } catch (err: any) {
-      setError(err?.message ?? String(err));
+    } catch (err: unknown) {
+      setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -142,6 +160,17 @@ export default function Home() {
     return record.toLowerCase() === user.login.toLowerCase();
   }, [address, user, ensGithub]);
 
+  const hasNetworkSwitch = Boolean(mainnetWebOrigin && sepoliaWebOrigin);
+
+  const switchNetwork = React.useCallback(
+    (targetOrigin: string) => {
+      const origin = targetOrigin.replace(/\/+$/, "");
+      const path = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      window.location.href = `${origin}${path}`;
+    },
+    []
+  );
+
   return (
     <main className="min-h-screen">
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6">
@@ -162,6 +191,28 @@ export default function Home() {
             >
               {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
+            {hasNetworkSwitch ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline">
+                    {chainLabel(chainId)}
+                    <ChevronDown className="ml-2 h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem disabled={chainId === 1} onClick={() => switchNetwork(mainnetWebOrigin)}>
+                    Ethereum Mainnet
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={chainId === 11155111} onClick={() => switchNetwork(sepoliaWebOrigin)}>
+                    Sepolia
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Badge variant="outline" title="Configured by NEXT_PUBLIC_CHAIN_ID">
+                {chainLabel(chainId)}
+              </Badge>
+            )}
             {!address ? (
               <Button
                 variant="outline"
