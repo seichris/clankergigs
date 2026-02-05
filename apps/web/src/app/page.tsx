@@ -38,7 +38,7 @@ function addressGradientStyle(addr: string) {
 }
 
 function chainLabel(chainId: number) {
-  if (chainId === 1) return "Mainnet";
+  if (chainId === 1) return "Ethereum";
   if (chainId === 11155111) return "Sepolia";
   if (chainId === 31337) return "Local";
   return `Chain ${chainId}`;
