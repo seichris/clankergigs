@@ -182,15 +182,6 @@ export default function Home() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              aria-label="Toggle dark mode"
-              disabled={!mounted}
-            >
-              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
             {hasNetworkSwitch ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -261,6 +252,16 @@ export default function Home() {
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hover:bg-transparent active:bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              aria-label="Toggle dark mode"
+              disabled={!mounted}
+            >
+              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Button>
           </div>
         </header>
 
