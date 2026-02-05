@@ -1,6 +1,8 @@
 # Sui Hackathon Implementation Plan (gh-bounties)
 
-This repo currently implements **GitHub issue bounties** on an EVM chain (Solidity + event indexer). This document is a plan for building a **Sui-native DeFi version** that can compete for:
+This repo currently implements **GitHub issue bounties** on Ethereum (Solidity + event indexer), with a production-style setup that supports **mainnet + Sepolia** via **separate deployments** (API + DB + web per network), plus an optional web UI “network switch” that redirects between deployments.
+
+This document is a plan for building a **Sui-native DeFi version** that can compete for:
 
 - **Best Overall Project ($3,000)**: end-to-end product + strong execution across multiple dimensions
 - **Notable Projects ($1,000 x up to 7)**: standout strength in one dimension (UX, creativity, technical design, etc.)
@@ -19,6 +21,23 @@ Turn a “GitHub bounty” into an on-chain **escrow vault** with:
 - Optional **sponsored transactions + zkLogin** so non-crypto GitHub devs can claim bounties
 
 This makes the product a DeFi app (escrow + swaps/yield + composable flows), not only a web2 coordination tool.
+
+---
+
+## Reality check: how we should ship Sui alongside EVM
+
+We should **not** try to make the existing EVM `apps/api` “also speak Sui” for a hackathon prototype. The EVM API is intentionally chain-shaped around:
+
+- EVM contract addressing (`0x…`), viem clients, and EIP-712 signing domains.
+- An indexer that tails EVM logs and stores EVM-specific identifiers (chain id + contract address).
+- A deployment model where each chain/network gets its **own API + DB + web** to avoid cross-network collisions and confusion.
+
+For Sui, adopt the same proven operational pattern:
+
+- **Sui web**: `sui.clankergigs.com` (separate app/deploy)
+- **Sui API + indexer**: e.g. `api-sui.clankergigs.com` (separate service)
+- **Sui DB**: separate database file/instance (do not share the EVM DB)
+- If we need Sui mainnet + testnet later: run **separate stacks per Sui network** (and optionally add an origin-based switcher, similar to mainnet↔sepolia).
 
 ---
 
@@ -55,18 +74,30 @@ Emit events for:
 
 ## Off-Chain Components (Reuse What Exists)
 
-### API / indexer
+### API / indexer (Sui-specific service, reuse GitHub modules)
 
-Adapt `apps/api` to index **Sui events** instead of EVM logs:
+Create a **new Sui API/indexer** (e.g. `apps/api-sui/`) that:
+
+- indexes **Sui events** (instead of EVM logs), and
+- reuses our existing GitHub logic (URL parsing, labels/comments, OAuth/device-flow sessions) by importing shared modules or extracting them into a shared package.
+
+Indexing strategy:
 
 - backfill via `suix_queryEvents` (or Sui GraphQL)
 - tail live events (websocket subscriptions if available; otherwise polling with checkpoints)
-- store normalized rows in existing tables (`bounty`, `funding`, `claim`, `payout`, `refund`)
+- store normalized rows in a **Sui DB** (a schema that mirrors the EVM tables conceptually, but uses Sui identifiers like `network`, `packageId`, and/or object IDs)
 - keep GitHub automations (labels + issue comments) as-is, but triggered by Sui events
+
+Key design choice (recommended for hackathon speed):
+
+- Do **not** attempt a single “multi-chain DB” across EVM and Sui. Use a separate DB for Sui and keep the data model simple and explicit for Sui.
 
 ### Web app
 
+Ship a **separate Sui web app** (e.g. `apps/web-sui/`) deployed at `sui.clankergigs.com`:
+
 - Replace wallet integration with Sui wallet adapter / dapp kit.
+- Point it at the Sui API (e.g. `NEXT_PUBLIC_API_URL=https://api-sui.clankergigs.com`).
 - Provide guided flows:
   - Create bounty (issue URL)
   - Fund bounty (choose coin; optionally “auto-swap to stable”)
@@ -189,14 +220,17 @@ Day 3: Claims + payout
 - implement `Claim` creation + status changes + payout
 - batch payout PTB (optional but high leverage)
 
-Day 4: Indexer (Sui events -> DB)
+Day 4: Sui API/indexer (Sui events -> Sui DB)
 
+- scaffold `apps/api-sui` (or equivalent) with its own DB + schema
 - backfill + tail events
-- populate `bounty`, `funding`, `claim`, `payout`, `refund` tables
+- populate Sui tables for `bounty`, `funding`, `claim`, `payout`, `refund`
+- reuse GitHub modules for label/comment automation where possible
 
 Day 5: Web flows
 
-- connect wallet
+- scaffold `apps/web-sui` deployed to `sui.clankergigs.com`
+- connect Sui wallet
 - create/fund/claim/payout screens
 - show on-chain state with clear “what happened” timelines
 
@@ -239,4 +273,3 @@ Day 7: Polish + demo + submission
 - Introduction to PTBs: https://docs.sui.io/guides/developer/sui-101/building-ptb
 - DeepBook docs: https://docs.sui.io/standards/deepbook
 - DeepBook repo: https://github.com/MystenLabs/deepbookv3
-
