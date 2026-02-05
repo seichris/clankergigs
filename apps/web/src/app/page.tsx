@@ -178,7 +178,7 @@ export default function Home() {
           <div className="space-y-2">
             {/* <h1 className="text-3xl font-semibold tracking-tight">Issues with bounties</h1> */}
             <p className="text-sm text-muted-foreground">
-              Fund issues. Claim rewards. Built for humans and AI Agents (start at <a href="https://github.com/seichris/gh-bounties/blob/main/AGENTS.md" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">AGENTS.md</a>).
+              Fund any Github issue. Claim rewards for solving it. Built for Humans and AI Agents like OpenClaw (start at <a href="https://github.com/seichris/gh-bounties/blob/main/AGENTS.md" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">AGENTS.md</a>).
             </p>
           </div>
           <div className="flex items-center gap-3">
