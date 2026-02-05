@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Bounty {
+  id             String   @id @default(cuid())
+  bountyObjectId String   @unique
+  packageId      String
+  repo           String
+  issueNumber    Int
+  issueUrl       String
+  admin          String
+  status         String
+
+  fundedMist  String @default("0")
+  escrowedMist String @default("0")
+  paidMist     String @default("0")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  fundings Funding[]
+  claims   Claim[]
+  payouts  Payout[]
+  refunds  Refund[]
+}
+
+model Funding {
+  id            String   @id @default(cuid())
+  bountyObjectId String
+  receiptObjectId String @unique
+  funder        String
+  amountMist    String
+  lockedUntilMs BigInt
+  txDigest      String
+  eventSeq      Int
+  timestampMs   BigInt?
+  createdAt     DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyObjectId], references: [bountyObjectId])
+
+  @@unique([txDigest, eventSeq])
+  @@index([bountyObjectId])
+  @@index([funder])
+}
+
+model Claim {
+  id            String   @id @default(cuid())
+  bountyObjectId String
+  claimObjectId  String @unique
+  claimer       String
+  claimUrl      String
+  txDigest      String
+  eventSeq      Int
+  timestampMs   BigInt?
+  createdAt     DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyObjectId], references: [bountyObjectId])
+
+  @@unique([txDigest, eventSeq])
+  @@index([bountyObjectId])
+  @@index([claimer])
+}
+
+model Payout {
+  id            String   @id @default(cuid())
+  bountyObjectId String
+  recipient     String
+  amountMist    String
+  txDigest      String
+  eventSeq      Int
+  timestampMs   BigInt?
+  createdAt     DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyObjectId], references: [bountyObjectId])
+
+  @@unique([txDigest, eventSeq])
+  @@index([bountyObjectId])
+  @@index([recipient])
+}
+
+model Refund {
+  id            String   @id @default(cuid())
+  bountyObjectId String
+  funder        String
+  amountMist    String
+  txDigest      String
+  eventSeq      Int
+  timestampMs   BigInt?
+  createdAt     DateTime @default(now())
+
+  bounty Bounty @relation(fields: [bountyObjectId], references: [bountyObjectId])
+
+  @@unique([txDigest, eventSeq])
+  @@index([bountyObjectId])
+  @@index([funder])
+}
+
+model IndexerState {
+  id        String   @id @default(cuid())
+  packageId String   @unique
+  cursorTx  String?
+  cursorSeq Int?
+  updatedAt DateTime @updatedAt
+}
