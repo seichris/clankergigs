@@ -5,6 +5,7 @@ import { Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +17,8 @@ import { FundIssueDialog } from "@/components/fund-issue-dialog";
 import { createIssueColumns } from "@/components/issues-table/columns";
 import { IssuesDataTable } from "@/components/issues-table/data-table";
 import type { IssueRow } from "@/components/issues-table/types";
+import { normalizeGithubUsername } from "@/lib/ens";
+import { useEnsAvatarUrl, useEnsPrimaryName, useEnsTextRecord } from "@/lib/hooks/useEns";
 import { useGithubUser } from "@/lib/hooks/useGithubUser";
 import { useTheme } from "@/lib/hooks/useTheme";
 import { useWallet } from "@/lib/hooks/useWallet";
@@ -25,11 +28,23 @@ function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+function addressGradientStyle(addr: string) {
+  const hex = addr.toLowerCase().replace(/^0x/, "");
+  const a = parseInt(hex.slice(0, 6), 16) % 360;
+  const b = parseInt(hex.slice(6, 12), 16) % 360;
+  return {
+    backgroundImage: `linear-gradient(135deg, hsl(${a} 70% 55%), hsl(${b} 70% 55%))`,
+  } as React.CSSProperties;
+}
+
 export default function Home() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
   const { address, hasProvider, connect } = useWallet();
   const { user, login, logout } = useGithubUser(apiUrl);
   const { theme, setTheme, mounted } = useTheme();
+  const { name: ensName } = useEnsPrimaryName(address);
+  const { avatarUrl: ensAvatarUrl } = useEnsAvatarUrl(ensName);
+  const { value: ensGithub } = useEnsTextRecord(ensName && user ? ensName : null, "com.github");
 
   const [issues, setIssues] = React.useState<IssueRow[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -119,6 +134,13 @@ export default function Home() {
     [address]
   );
 
+  const githubMatch = React.useMemo(() => {
+    if (!address || !user) return false;
+    const record = normalizeGithubUsername(ensGithub);
+    if (!record) return false;
+    return record.toLowerCase() === user.login.toLowerCase();
+  }, [address, user, ensGithub]);
+
   return (
     <main className="min-h-screen">
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6">
@@ -148,9 +170,23 @@ export default function Home() {
                 {hasProvider ? "Connect wallet" : "No wallet detected"}
               </Button>
             ) : (
-              <Button variant="outline" onClick={() => navigator.clipboard.writeText(address)}>
-                {shortAddress(address)}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" onClick={() => navigator.clipboard.writeText(address)}>
+                  <Avatar className="h-5 w-5">
+                    {ensAvatarUrl ? <AvatarImage src={ensAvatarUrl} alt={ensName || "ENS avatar"} /> : null}
+                    <AvatarFallback style={addressGradientStyle(address)} />
+                  </Avatar>
+                  {ensName || shortAddress(address)}
+                </Button>
+                {githubMatch ? (
+                  <Badge
+                    variant="outline"
+                    title="ENS text record com.github matches your connected GitHub account."
+                  >
+                    ENS ↔ GitHub
+                  </Badge>
+                ) : null}
+              </div>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

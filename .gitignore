@@ -14,7 +14,9 @@ apps/web/.env.local
 apps/api/dev.db
 apps/api/prisma/dev.db
 apps/api/prisma/prisma/dev.db
+apps/api/prisma/prisma/*.db
 apps/api/prisma/.env
+apps/api/src/generated/
 
 contracts/out
 contracts/cache
