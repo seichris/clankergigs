@@ -103,6 +103,10 @@ scripts-for-ai-agents/# CLI agent scripts (cast/curl/jq/gh)
 ### Deploy (Sepolia / Mainnet)
 - Contract deploy prints the deployed address:
   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
+- Recommended: deploy **two separate stacks** (API + DB + web), one per network.
+  - Mainnet stack: `CHAIN_ID=1` + mainnet `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the mainnet web origin.
+  - Sepolia stack: `CHAIN_ID=11155111` + Sepolia `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the Sepolia web origin.
+  - Web network switch (optional): set `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET` and `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA` so users can jump between the two webapps.
 
 ## Roadmap
 - Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures
