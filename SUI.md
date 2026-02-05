@@ -107,6 +107,34 @@ Ship a **separate Sui web app** (e.g. `apps/web-sui/`) deployed at `sui.clankerg
 
 ---
 
+## Local dev quickstart (Sui stack)
+
+1) Publish the Move package (testnet/devnet):
+
+- Package: `sui/gh-bounties`
+- After publish, record the package id (set it as `SUI_PACKAGE_ID` for the indexer).
+
+2) Run the Sui API/indexer:
+
+- Copy `apps/api-sui/.env.example` → `apps/api-sui/.env` (or set env vars in your process manager)
+- Example:
+  - `DATABASE_URL="file:./prisma/dev.db"`
+  - `PORT=8788`
+  - `SUI_RPC_URL=...`
+  - `SUI_PACKAGE_ID=0x...`
+  - `WEB_ORIGIN=http://localhost:3001`
+
+3) Run the Sui web viewer:
+
+- Copy `apps/web-sui/.env.local.example` → `apps/web-sui/.env.local`
+- Start:
+  - `pnpm --filter @gh-bounties/web-sui dev`
+
+Notes:
+- `apps/web-sui` is currently a read-only viewer for indexed events. Wallet + write flows (create/fund/claim/payout/refund) can be layered on later.
+
+---
+
 ## Prize Strategy Options
 
 Pick one “Best Overall” option or one “Notable” option. You can also mix, but scope control matters.
