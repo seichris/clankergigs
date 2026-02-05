@@ -156,3 +156,32 @@ model GithubSession {
 
   @@index([expiresAt])
 }
+
+model ApiSession {
+  id                  String   @id @default(cuid())
+  tokenHash           String   @unique
+  githubAccessTokenEnc String
+  userLogin           String
+  userId              Int
+  userAvatarUrl       String?
+  label               String?
+  createdAt           DateTime @default(now())
+  expiresAt           DateTime
+
+  @@index([expiresAt])
+  @@index([userLogin])
+}
+
+model GithubDeviceAuth {
+  id             String   @id @default(cuid())
+  deviceCodeHash String   @unique
+  userCode       String
+  verificationUri String
+  interval       Int
+  scope          String?
+  label          String?
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@index([expiresAt])
+}

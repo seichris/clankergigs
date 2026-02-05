@@ -56,6 +56,14 @@ function formatAssetValue(value: string, decimals: number) {
   }
 }
 
+function truncateDecimals(value: string, maxDecimals: number) {
+  const dot = value.indexOf(".");
+  if (dot === -1) return value;
+  const decimals = value.slice(dot + 1);
+  if (decimals.length <= maxDecimals) return value;
+  return `${value.slice(0, dot)}.${decimals.slice(0, maxDecimals)}`;
+}
+
 function assetTotals(issue: IssueRow, token: string) {
   return issue.assets.find((asset) => asset.token.toLowerCase() === token.toLowerCase());
 }
@@ -77,9 +85,8 @@ function UnlockBar({ schedule }: { schedule: UnlockSchedule | null }) {
 
   return (
     <div className="flex-1">
-      <div className="relative h-2 rounded-full bg-muted">
+      <div className="flex h-2 overflow-hidden rounded-full bg-muted">
         {days.map((entry) => {
-          const left = maxDay > 0 ? Math.min(100, (entry.day / maxDay) * 100) : 0;
           let opacity = 0.7;
           if (total > 0n) {
             try {
@@ -89,13 +96,7 @@ function UnlockBar({ schedule }: { schedule: UnlockSchedule | null }) {
               opacity = 0.7;
             }
           }
-          return (
-            <span
-              key={entry.day}
-              className="absolute top-0 h-2 w-[2px] rounded-full bg-foreground"
-              style={{ left: `${left}%`, opacity }}
-            />
-          );
+          return <span key={entry.day} className="h-full flex-1 bg-foreground" style={{ opacity }} />;
         })}
       </div>
       <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
@@ -112,12 +113,12 @@ function assetLine(
   decimals: number,
   schedule: UnlockSchedule | null
 ) {
-  const amount = totals ? formatAssetValue(totals.escrowedWei, decimals) : "0";
+  const amount = totals ? truncateDecimals(formatAssetValue(totals.escrowedWei, decimals), 4) : "0";
   return (
     <div className="flex items-center gap-3">
+      <span className="text-xs text-muted-foreground tabular-nums">{amount}</span>
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <UnlockBar schedule={schedule} />
-      <span className="text-xs text-muted-foreground">{amount}</span>
     </div>
   );
 }
@@ -270,16 +271,6 @@ export function createIssueColumns(options: {
           </div>
         );
       },
-    },
-    {
-      id: "identifiers",
-      header: "Identifiers",
-      cell: ({ row }) => (
-        <div className="flex flex-col text-xs font-mono text-muted-foreground">
-          <span>repo: {shortHex(row.original.repoHash)}</span>
-          <span>bounty: {shortHex(row.original.bountyId)}</span>
-        </div>
-      ),
     },
     {
       id: "linkedPrs",

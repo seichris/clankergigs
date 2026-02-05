@@ -1,17 +1,25 @@
+import crypto from "node:crypto";
 import { loadEnv } from "./env.js";
 import { buildServer } from "./server.js";
 import { startIndexer } from "./indexer/indexer.js";
-import { createPublicClient, http, isAddress, keccak256, parseAbi, toBytes, type Address, type Hex } from "viem";
+import { concatBytes, createPublicClient, fallback, http, isAddress, keccak256, parseAbi, stringToHex, toBytes, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.js";
-import { getGithubAccessTokenFromRequest, getGithubUserFromRequest } from "./github/oauth.js";
 import { backfillLinkedPullRequests } from "./github/backfill.js";
 import { getPrisma } from "./db.js";
+import { createApiSession, resolveGithubAuthFromRequest, revokeApiSession } from "./auth/sessions.js";
 
 async function main() {
   const env = loadEnv();
   // Prisma reads DATABASE_URL from process.env at construction time.
   process.env.DATABASE_URL ||= env.DATABASE_URL;
+
+  if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0 && env.RPC_URLS.length === 0) {
+    throw new Error("RPC not configured. Set RPC_URL (comma-separated ok) or RPC_URLS_ETHEREUM_SEPOLIA/RPC_URLS_ETHEREUM_MAINNET.");
+  }
+
+  const rpcTransport =
+    env.RPC_URLS.length > 1 ? fallback(env.RPC_URLS.map((url) => http(url))) : http(env.RPC_URLS[0] || "");
 
   const githubMode = env.GITHUB_AUTH_MODE ?? "pat";
   const github =
@@ -25,13 +33,250 @@ async function main() {
 
   const app = await buildServer({ github });
 
+  app.get("/id", async (req, reply) => {
+    const q = req.query as { repo?: string; issue?: string };
+    const repoRaw = typeof q.repo === "string" ? q.repo.trim() : "";
+    const issueRaw = typeof q.issue === "string" ? q.issue.trim() : "";
+    if (!repoRaw) return reply.code(400).send({ error: "Missing repo" });
+    if (!issueRaw || !/^\d+$/.test(issueRaw)) return reply.code(400).send({ error: "Invalid issue" });
+
+    const issueNumber = BigInt(issueRaw);
+    const trimmed = repoRaw.trim();
+    const withoutProto = trimmed.replace(/^https?:\/\//, "");
+    const withoutHost = withoutProto.replace(/^www\./, "");
+    const normalized =
+      withoutHost.startsWith("github.com/")
+        ? withoutHost
+        : withoutHost.includes("/")
+          ? `github.com/${withoutHost.replace(/^\/+/, "")}`
+          : `github.com/${withoutHost}`;
+
+    const repoHash = keccak256(stringToHex(normalized));
+    const repoBytes = toBytes(repoHash);
+    const issueBytes = toBytes(issueNumber, { size: 32 });
+    const bountyId = keccak256(concatBytes([repoBytes, issueBytes]));
+    return reply.send({ repo: normalized, repoHash, issueNumber: issueNumber.toString(), bountyId });
+  });
+
+  app.get("/contract", async (req, reply) => {
+    if (!env.CONTRACT_ADDRESS) return reply.code(400).send({ error: "CONTRACT_ADDRESS not configured" });
+    const client = createPublicClient({ transport: rpcTransport });
+    const abi = parseAbi([
+      "function payoutAuthorizer() view returns (address)",
+      "function dao() view returns (address)",
+      "function daoDelaySeconds() view returns (uint64)",
+      "function defaultLockDuration() view returns (uint64)"
+    ]);
+    const [payoutAuthorizer, dao, daoDelaySeconds, defaultLockDuration] = await Promise.all([
+      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "payoutAuthorizer" }) as Promise<Hex>,
+      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "dao" }) as Promise<Hex>,
+      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "daoDelaySeconds" }) as Promise<bigint>,
+      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "defaultLockDuration" }) as Promise<bigint>
+    ]);
+
+    return reply.send({
+      chainId: env.CHAIN_ID,
+      rpcUrl: env.RPC_URL,
+      contractAddress: env.CONTRACT_ADDRESS,
+      payoutAuthorizer,
+      dao,
+      daoDelaySeconds: daoDelaySeconds.toString(),
+      defaultLockDuration: defaultLockDuration.toString()
+    });
+  });
+
+  // ---- CLI device flow (Option 2) ----
+  app.post("/auth/device/start", async (req, reply) => {
+    const clientId = env.GITHUB_OAUTH_CLIENT_ID || process.env.GITHUB_CLIENT_ID || "";
+    if (!clientId) return reply.code(500).send({ error: "GitHub OAuth not configured (missing GITHUB_OAUTH_CLIENT_ID)" });
+    if (!env.API_TOKEN_ENCRYPTION_KEY) return reply.code(500).send({ error: "Device flow disabled (missing API_TOKEN_ENCRYPTION_KEY)" });
+
+    const rawBody = req.body as any;
+    let body: any = rawBody;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = null;
+      }
+    }
+    if (body && typeof body === "object" && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+      try {
+        const text = Buffer.from(body).toString("utf8");
+        body = JSON.parse(text);
+      } catch {
+        body = null;
+      }
+    }
+    if (!body || typeof body !== "object") body = {};
+    const scope = typeof body?.scope === "string" ? body.scope.trim() : (env.GITHUB_OAUTH_SCOPE || "").trim();
+    const label = typeof body?.label === "string" ? body.label.trim() : "";
+
+    const form = new URLSearchParams();
+    form.set("client_id", clientId);
+    if (scope) form.set("scope", scope);
+
+    const res = await fetch("https://github.com/login/device/code", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "gh-bounties" },
+      body: form.toString()
+    });
+    const json = (await res.json().catch(() => null)) as any;
+    if (!res.ok || !json?.device_code) {
+      const msg = typeof json?.error_description === "string" ? json.error_description : res.statusText;
+      return reply.code(502).send({ error: `GitHub device flow start failed (${res.status}): ${msg}` });
+    }
+
+    const deviceCode = String(json.device_code);
+    const userCode = String(json.user_code || "");
+    const verificationUri = String(json.verification_uri || "");
+    const interval = Number(json.interval || 5);
+    const expiresIn = Number(json.expires_in || 900);
+    if (!deviceCode || !userCode || !verificationUri) return reply.code(502).send({ error: "GitHub device flow returned invalid payload" });
+
+    const prisma = getPrisma();
+    const deviceCodeHash = crypto.createHash("sha256").update(deviceCode).digest("hex");
+    const expiresAt = new Date(Date.now() + expiresIn * 1000);
+    await prisma.githubDeviceAuth.create({
+      data: {
+        deviceCodeHash,
+        userCode,
+        verificationUri,
+        interval: Math.max(1, Math.floor(interval)),
+        scope: scope || null,
+        label: label || null,
+        expiresAt
+      }
+    });
+
+    return reply.send({
+      deviceCode,
+      userCode,
+      verificationUri,
+      interval: Math.max(1, Math.floor(interval)),
+      expiresIn,
+      label: label || undefined
+    });
+  });
+
+  app.post("/auth/device/poll", async (req, reply) => {
+    const clientId = env.GITHUB_OAUTH_CLIENT_ID || process.env.GITHUB_CLIENT_ID || "";
+    if (!clientId) return reply.code(500).send({ error: "GitHub OAuth not configured (missing GITHUB_OAUTH_CLIENT_ID)" });
+    if (!env.API_TOKEN_ENCRYPTION_KEY) return reply.code(500).send({ error: "Device flow disabled (missing API_TOKEN_ENCRYPTION_KEY)" });
+
+    const rawBody = req.body as any;
+    let body: any = rawBody;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = null;
+      }
+    }
+    if (body && typeof body === "object" && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+      try {
+        const text = Buffer.from(body).toString("utf8");
+        body = JSON.parse(text);
+      } catch {
+        body = null;
+      }
+    }
+    if (!body || typeof body !== "object") body = {};
+    const deviceCode = typeof body?.deviceCode === "string" ? body.deviceCode.trim() : "";
+    const label = typeof body?.label === "string" ? body.label.trim() : null;
+    if (!deviceCode) return reply.code(400).send({ error: "Missing deviceCode" });
+
+    const prisma = getPrisma();
+    const deviceCodeHash = crypto.createHash("sha256").update(deviceCode).digest("hex");
+    const record = await prisma.githubDeviceAuth.findUnique({ where: { deviceCodeHash } });
+    if (!record) return reply.code(404).send({ error: "Unknown deviceCode" });
+    if (record.expiresAt.getTime() <= Date.now()) {
+      await prisma.githubDeviceAuth.delete({ where: { deviceCodeHash } }).catch(() => {});
+      return reply.code(400).send({ error: "Device code expired" });
+    }
+
+    const form = new URLSearchParams();
+    form.set("client_id", clientId);
+    form.set("device_code", deviceCode);
+    form.set("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
+
+    const res = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "gh-bounties" },
+      body: form.toString()
+    });
+    const json = (await res.json().catch(() => null)) as any;
+    if (!res.ok) {
+      const msg = typeof json?.error_description === "string" ? json.error_description : res.statusText;
+      return reply.code(502).send({ error: `GitHub device flow poll failed (${res.status}): ${msg}` });
+    }
+
+    if (json?.error) {
+      const err = String(json.error);
+      if (err === "authorization_pending" || err === "slow_down") {
+        const interval = err === "slow_down" ? record.interval + 5 : record.interval;
+        if (err === "slow_down" && interval !== record.interval) {
+          await prisma.githubDeviceAuth.update({ where: { deviceCodeHash }, data: { interval } }).catch(() => {});
+        }
+        return reply.code(202).send({ status: "pending", interval });
+      }
+      if (err === "access_denied") {
+        await prisma.githubDeviceAuth.delete({ where: { deviceCodeHash } }).catch(() => {});
+        return reply.code(403).send({ error: "Access denied" });
+      }
+      if (err === "expired_token") {
+        await prisma.githubDeviceAuth.delete({ where: { deviceCodeHash } }).catch(() => {});
+        return reply.code(400).send({ error: "Device code expired" });
+      }
+      return reply.code(400).send({ error: `Device flow error: ${err}` });
+    }
+
+    const githubAccessToken = typeof json?.access_token === "string" ? json.access_token : "";
+    if (!githubAccessToken) return reply.code(502).send({ error: "GitHub device flow returned no access_token" });
+
+    const ghHeaders = {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${githubAccessToken}`,
+      "User-Agent": "gh-bounties"
+    } as Record<string, string>;
+    const userRes = await fetch("https://api.github.com/user", { headers: ghHeaders });
+    if (!userRes.ok) {
+      const text = await userRes.text().catch(() => "");
+      return reply.code(502).send({ error: `GitHub /user failed (${userRes.status}): ${text || userRes.statusText}` });
+    }
+    const userData = (await userRes.json()) as any;
+    if (!userData?.login) return reply.code(502).send({ error: "GitHub /user returned invalid payload" });
+
+    const session = await createApiSession({
+      githubAccessToken,
+      user: { login: String(userData.login), id: Number(userData.id || 0), avatar_url: userData.avatar_url ?? null },
+      label: label || record.label || null
+    });
+    await prisma.githubDeviceAuth.delete({ where: { deviceCodeHash } }).catch(() => {});
+    return reply.send({
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      user: session.user
+    });
+  });
+
+  app.post("/auth/token/revoke", async (req, reply) => {
+    const auth = req.headers.authorization || "";
+    const m = auth.match(/^Bearer\s+(.+)$/i);
+    const token = m?.[1]?.trim() || "";
+    if (!token) return reply.code(400).send({ error: "Missing Authorization: Bearer <token>" });
+    const ok = await revokeApiSession(token);
+    return reply.send({ ok });
+  });
+
   // Payout authorization: verify GitHub admin and sign an EIP-712 authorization.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0 && env.BACKEND_SIGNER_PRIVATE_KEY && env.BACKEND_SIGNER_PRIVATE_KEY.length > 0) {
-    const client = createPublicClient({ transport: http(env.RPC_URL) });
+    const client = createPublicClient({ transport: rpcTransport });
     const signer = privateKeyToAccount(env.BACKEND_SIGNER_PRIVATE_KEY as Hex);
 
     const authAbi = parseAbi([
       "function payoutNonces(bytes32 bountyId) view returns (uint256)",
+      "function refundNonces(bytes32 bountyId) view returns (uint256)",
       "function claimNonces(bytes32 bountyId, address claimer) view returns (uint256)",
       "function bounties(bytes32 bountyId) view returns (bytes32 repoHash, uint256 issueNumber, uint8 status, uint64 createdAt, string metadataURI)"
     ]);
@@ -39,9 +284,7 @@ async function main() {
     app.post("/payout-auth", async (req, reply) => {
       // Preferred: GitHub OAuth login via HttpOnly session cookie.
       // Back-compat: allow Authorization: Bearer <token> for local testing / scripts.
-      const auth = req.headers.authorization || "";
-      const m = auth.match(/^Bearer\s+(.+)$/i);
-      const githubToken = (m?.[1]?.trim() || "") || (await getGithubAccessTokenFromRequest(req)) || "";
+      const { githubToken } = await resolveGithubAuthFromRequest(req);
       if (!githubToken) return reply.code(401).send({ error: "Not logged in (use GitHub OAuth login or send Authorization: Bearer <token>)" });
 
       // Be tolerant of mis-parsed JSON bodies (e.g. body arrives as a string).
@@ -194,10 +437,32 @@ async function main() {
     });
 
     app.post("/claim-auth", async (req, reply) => {
-      const githubToken = (await getGithubAccessTokenFromRequest(req)) || "";
-      const githubUser = await getGithubUserFromRequest(req);
-      if (!githubToken || !githubUser) {
-        return reply.code(401).send({ error: "Not logged in (use GitHub OAuth login)" });
+      const { githubToken, user: cookieOrSessionUser } = await resolveGithubAuthFromRequest(req);
+      let githubUser = cookieOrSessionUser;
+      if (githubToken && !githubUser) {
+        const ghHeaders = {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "gh-bounties"
+        } as Record<string, string>;
+
+        let userRes = await fetch("https://api.github.com/user", {
+          headers: { ...ghHeaders, Authorization: `Bearer ${githubToken}` }
+        });
+        if (userRes.status === 401) {
+          userRes = await fetch("https://api.github.com/user", {
+            headers: { ...ghHeaders, Authorization: `token ${githubToken}` }
+          });
+        }
+        if (userRes.ok) {
+          const userData = (await userRes.json()) as any;
+          if (userData?.login && typeof userData.login === "string") {
+            githubUser = { login: userData.login, id: Number(userData.id || 0), avatar_url: userData.avatar_url ?? null };
+          }
+        }
+      }
+
+      if (!githubToken || !githubUser?.login) {
+        return reply.code(401).send({ error: "Not logged in (use GitHub OAuth login or send Authorization: Bearer <token>)" });
       }
 
       const rawBody = req.body as any;
@@ -338,6 +603,120 @@ async function main() {
       });
     });
 
+    app.post("/refund-auth", async (req, reply) => {
+      const { githubToken } = await resolveGithubAuthFromRequest(req);
+      if (!githubToken) return reply.code(401).send({ error: "Not logged in (use GitHub OAuth login or send Authorization: Bearer <token>)" });
+
+      const rawBody = req.body as any;
+      let body: any = rawBody;
+      if (typeof body === "string") {
+        try {
+          body = JSON.parse(body);
+        } catch {
+          body = null;
+        }
+      }
+      if (body && typeof body === "object" && (Buffer.isBuffer(body) || body instanceof Uint8Array)) {
+        try {
+          const text = Buffer.from(body).toString("utf8");
+          body = JSON.parse(text);
+        } catch {
+          body = null;
+        }
+      }
+      if (!body || typeof body !== "object") return reply.code(400).send({ error: "Invalid JSON body" });
+
+      const bountyIdRaw = body?.bountyId as unknown;
+      const token = body?.token as Address | undefined;
+      const funder = body?.funder as Address | undefined;
+      const amountWeiStr = body?.amountWei as string | undefined;
+      const deadlineStr = body?.deadline as string | undefined;
+
+      let bountyIdStr = typeof bountyIdRaw === "string" ? bountyIdRaw.trim() : "";
+      if (/^[a-fA-F0-9]{64}$/.test(bountyIdStr)) bountyIdStr = `0x${bountyIdStr}`;
+      if (!/^0x[a-fA-F0-9]{64}$/.test(bountyIdStr)) return reply.code(400).send({ error: "Invalid bountyId" });
+      const bountyId = bountyIdStr as Hex;
+      if (!token || !isAddress(token)) return reply.code(400).send({ error: "Invalid token address" });
+      if (!funder || !isAddress(funder)) return reply.code(400).send({ error: "Invalid funder address" });
+      if (!amountWeiStr || !/^\d+$/.test(amountWeiStr)) return reply.code(400).send({ error: "Invalid amountWei" });
+
+      const amountWei = BigInt(amountWeiStr);
+      const deadline = deadlineStr && /^\d+$/.test(deadlineStr) ? BigInt(deadlineStr) : BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
+
+      const bounty = (await client.readContract({
+        address: env.CONTRACT_ADDRESS as Hex,
+        abi: authAbi,
+        functionName: "bounties",
+        args: [bountyId]
+      })) as readonly [Hex, bigint, number, bigint, string];
+
+      const createdAt = BigInt(bounty[3] ?? 0n);
+      const issueUrl = (bounty[4] ?? "").toString();
+      if (createdAt === 0n) return reply.code(404).send({ error: "Bounty not found on-chain" });
+
+      let owner: string;
+      let repo: string;
+      try {
+        const parsed = parseGithubIssueUrl(issueUrl);
+        owner = parsed.owner;
+        repo = parsed.repo;
+      } catch {
+        return reply.code(400).send({ error: `Bounty metadataURI is not a GitHub issue URL: ${issueUrl}` });
+      }
+
+      const ghHeaders = {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "gh-bounties"
+      } as Record<string, string>;
+
+      let ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: { ...ghHeaders, Authorization: `Bearer ${githubToken}` }
+      });
+      if (ghRes.status === 401) {
+        ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+          headers: { ...ghHeaders, Authorization: `token ${githubToken}` }
+        });
+      }
+      if (!ghRes.ok) {
+        const text = await ghRes.text().catch(() => "");
+        return reply.code(403).send({ error: `GitHub API error (${ghRes.status}): ${text || ghRes.statusText}` });
+      }
+      const ghData = (await ghRes.json()) as any;
+      if (!ghData?.permissions?.admin) return reply.code(403).send({ error: "GitHub user is not a repo admin" });
+
+      const nonce = (await client.readContract({
+        address: env.CONTRACT_ADDRESS as Hex,
+        abi: authAbi,
+        functionName: "refundNonces",
+        args: [bountyId]
+      })) as bigint;
+
+      const signature = await signer.signTypedData({
+        domain: { name: "GHBounties", version: "1", chainId: env.CHAIN_ID, verifyingContract: env.CONTRACT_ADDRESS as Hex },
+        types: {
+          Refund: [
+            { name: "bountyId", type: "bytes32" },
+            { name: "token", type: "address" },
+            { name: "funder", type: "address" },
+            { name: "amount", type: "uint256" },
+            { name: "nonce", type: "uint256" },
+            { name: "deadline", type: "uint256" }
+          ]
+        },
+        primaryType: "Refund",
+        message: { bountyId, token, funder, amount: amountWei, nonce, deadline }
+      });
+
+      return reply.send({
+        issueUrl,
+        owner,
+        repo,
+        nonce: nonce.toString(),
+        deadline: deadline.toString(),
+        signature
+      });
+    });
+
     app.log.info({ signer: signer.address }, "payout auth enabled");
   } else {
     app.log.warn("payout auth disabled (missing CONTRACT_ADDRESS or BACKEND_SIGNER_PRIVATE_KEY)");
@@ -346,10 +725,11 @@ async function main() {
   // Indexer is optional while bootstrapping the UI, but usually you'll set CONTRACT_ADDRESS.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0) {
     await startIndexer({
-      rpcUrl: env.RPC_URL,
+      rpcUrls: env.RPC_URLS,
       chainId: env.CHAIN_ID,
       contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
-      github
+      github,
+      backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK
     });
     app.log.info({ contract: env.CONTRACT_ADDRESS, chainId: env.CHAIN_ID }, "indexer started");
   } else {

@@ -90,7 +90,16 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
 
     const q = req.query as any;
     const returnTo = typeof q?.returnTo === "string" ? q.returnTo : webOrigin;
-    if (!returnTo.startsWith(webOrigin)) return reply.code(400).send({ error: "Invalid returnTo" });
+    const allowedCsv = (process.env.ALLOWED_RETURN_TO_ORIGINS || "").trim();
+    const allowed =
+      allowedCsv.length > 0
+        ? allowedCsv.split(",").map((s) => s.trim()).filter(Boolean)
+        : [webOrigin, process.env.API_ORIGIN || ""].filter(Boolean);
+
+    const ok = allowed.some((origin) => returnTo.startsWith(origin));
+    if (!ok) {
+      return reply.code(400).send({ error: "Invalid returnTo" });
+    }
 
     const state = randomHex(16);
     pendingStates.set(state, { returnTo, createdAt: nowMs() });

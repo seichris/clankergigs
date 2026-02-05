@@ -1,5 +1,5 @@
 import Fastify from "fastify";
-import cors from "@fastify/cors";
+import cors, { type FastifyCorsOptions } from "@fastify/cors";
 import { getPrisma } from "./db.js";
 import { registerGithubWebhookRoutes } from "./github/webhook.js";
 import { getGithubAccessTokenFromRequest, getGithubUserFromRequest, registerGithubOAuthRoutes } from "./github/oauth.js";
@@ -13,9 +13,18 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
   const prisma = getPrisma();
 
   const webOrigin = process.env.WEB_ORIGIN || "http://localhost:3000";
+  const webOrigins = webOrigin
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const allowedOrigins = new Set(webOrigins.length > 0 ? webOrigins : ["http://localhost:3000"]);
+  const corsOrigin: FastifyCorsOptions["origin"] = async (origin?: string) => {
+    if (!origin) return false;
+    return allowedOrigins.has(origin) ? origin : false;
+  };
   // CORS is only needed for browser-based API calls (e.g. /bounties, /payout-auth, /auth/me).
   // Use credentials so the GitHub OAuth session cookie can be sent.
-  await app.register(cors, { origin: webOrigin, credentials: true });
+  await app.register(cors, { origin: corsOrigin, credentials: true });
 
   app.get("/health", async () => ({ ok: true }));
 
@@ -106,7 +115,6 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
     const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
     const take = Math.min(Math.max(Number(q.take || "200"), 1), 500);
     const includeGithub = q.include === "github";
-
     const where: any = {};
     if (chainId) where.chainId = chainId;
     if (contractAddress) where.contractAddress = contractAddress;
@@ -126,7 +134,6 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
         _count: { select: { fundings: true, claims: true, payouts: true, refunds: true } }
       }
     });
-
     const nowSec = Math.floor(Date.now() / 1000);
     const daySeconds = 24 * 60 * 60;
 

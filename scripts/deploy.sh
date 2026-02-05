@@ -1,38 +1,148 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONTRACTS_DIR="${ROOT_DIR}/contracts"
+# Best-effort: load root .env, but don't override explicitly provided env vars
+# (e.g. `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`).
+dotenv_path="${DOTENV_CONFIG_PATH:-.env}"
+if [[ -f "$dotenv_path" ]]; then
+  rpc_url_set=0; private_key_set=0; chain_id_set=0; backend_signer_set=0; payout_auth_set=0
+  default_lock_set=0; dao_addr_set=0; dao_delay_set=0; forge_flags_set=0
 
-RPC_URL="${RPC_URL:?set RPC_URL}"
-PRIVATE_KEY="${PRIVATE_KEY:?set PRIVATE_KEY}"
+  [[ -n "${RPC_URL:-}" ]] && rpc_url_set=1
+  [[ -n "${PRIVATE_KEY:-}" ]] && private_key_set=1
+  [[ -n "${CHAIN_ID:-}" ]] && chain_id_set=1
+  [[ -n "${BACKEND_SIGNER_PRIVATE_KEY:-}" ]] && backend_signer_set=1
+  [[ -n "${PAYOUT_AUTHORIZER:-}" ]] && payout_auth_set=1
+  [[ -n "${DEFAULT_LOCK_SECONDS:-}" ]] && default_lock_set=1
+  [[ -n "${DAO_ADDRESS:-}" ]] && dao_addr_set=1
+  [[ -n "${DAO_DELAY_SECONDS:-}" ]] && dao_delay_set=1
+  [[ -n "${FORGE_SCRIPT_FLAGS:-}" ]] && forge_flags_set=1
 
-if [[ -n "${NO_PROXY:-}" ]]; then
-  NO_PROXY="${NO_PROXY},localhost,127.0.0.1,::1"
-else
-  NO_PROXY="localhost,127.0.0.1,::1"
+  rpc_url_val="${RPC_URL:-}"
+  private_key_val="${PRIVATE_KEY:-}"
+  chain_id_val="${CHAIN_ID:-}"
+  backend_signer_val="${BACKEND_SIGNER_PRIVATE_KEY:-}"
+  payout_auth_val="${PAYOUT_AUTHORIZER:-}"
+  default_lock_val="${DEFAULT_LOCK_SECONDS:-}"
+  dao_addr_val="${DAO_ADDRESS:-}"
+  dao_delay_val="${DAO_DELAY_SECONDS:-}"
+  forge_flags_val="${FORGE_SCRIPT_FLAGS:-}"
+
+  # shellcheck disable=SC1090
+  source "$dotenv_path"
+
+  [[ "$rpc_url_set" -eq 1 ]] && RPC_URL="$rpc_url_val"
+  [[ "$private_key_set" -eq 1 ]] && PRIVATE_KEY="$private_key_val"
+  [[ "$chain_id_set" -eq 1 ]] && CHAIN_ID="$chain_id_val"
+  [[ "$backend_signer_set" -eq 1 ]] && BACKEND_SIGNER_PRIVATE_KEY="$backend_signer_val"
+  [[ "$payout_auth_set" -eq 1 ]] && PAYOUT_AUTHORIZER="$payout_auth_val"
+  [[ "$default_lock_set" -eq 1 ]] && DEFAULT_LOCK_SECONDS="$default_lock_val"
+  [[ "$dao_addr_set" -eq 1 ]] && DAO_ADDRESS="$dao_addr_val"
+  [[ "$dao_delay_set" -eq 1 ]] && DAO_DELAY_SECONDS="$dao_delay_val"
+  [[ "$forge_flags_set" -eq 1 ]] && FORGE_SCRIPT_FLAGS="$forge_flags_val"
 fi
-export NO_PROXY
 
-CHAIN_ID_HEX="$(curl -s -X POST "${RPC_URL}" -H "content-type: application/json" --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' | jq -r '.result')"
-if [[ -z "${CHAIN_ID_HEX}" || "${CHAIN_ID_HEX}" == "null" ]]; then
-  echo "failed to fetch chain id from RPC_URL" 1>&2
+trim() {
+  local v="${1:-}"
+  # shellcheck disable=SC2001
+  echo "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+rpc_host() {
+  local url="${1:-}"
+  echo "$url" | sed -E 's#^[a-zA-Z]+://([^/@]+@)?([^/:?]+).*#\2#'
+}
+
+select_rpc_url() {
+  local raw="${1:-}"
+  if [[ -z "$raw" ]]; then
+    # Allow matching the API/web config style, where RPC_URL is left blank and a chain-specific list is provided.
+    if [[ "${CHAIN_ID:-}" == "1" ]]; then
+      raw="${RPC_URLS_ETHEREUM_MAINNET:-}"
+      [[ -z "$raw" ]] && raw="${RPC_URL_ETHEREUM_MAINNET:-}"
+    elif [[ "${CHAIN_ID:-}" == "11155111" ]]; then
+      raw="${RPC_URLS_ETHEREUM_SEPOLIA:-}"
+      [[ -z "$raw" ]] && raw="${RPC_URL_ETHEREUM_SEPOLIA:-}"
+    fi
+  fi
+
+  local candidates=()
+  IFS=',' read -r -a candidates <<< "$raw"
+
+  if [[ "${#candidates[@]}" -eq 0 ]]; then
+    echo "Missing RPC_URL (or RPC_URLS_ETHEREUM_MAINNET/RPC_URLS_ETHEREUM_SEPOLIA)" >&2
+    return 1
+  fi
+
+  if ! command -v cast >/dev/null 2>&1; then
+    # If cast is missing, just take the first URL.
+    RPC_URL="$(trim "${candidates[0]}")"
+    return 0
+  fi
+
+  local u=""
+  for u in "${candidates[@]}"; do
+    u="$(trim "$u")"
+    [[ -z "$u" ]] && continue
+    if cast chain-id --rpc-url "$u" >/dev/null 2>&1; then
+      RPC_URL="$u"
+      return 0
+    fi
+  done
+
+  local hosts=()
+  for u in "${candidates[@]}"; do
+    u="$(trim "$u")"
+    [[ -z "$u" ]] && continue
+    hosts+=("$(rpc_host "$u")")
+  done
+  echo "No working RPC_URL found (tried: ${hosts[*]:-<none>})." >&2
+  echo "If you're using a public RPC, it may be rate-limiting you; use a dedicated provider endpoint." >&2
+  return 1
+}
+
+select_rpc_url "${RPC_URL:-}"
+
+if [[ -z "${PRIVATE_KEY:-}" ]]; then
+  echo "Missing PRIVATE_KEY (deployer EOA)" >&2
   exit 1
 fi
 
-CHAIN_ID="$((CHAIN_ID_HEX))"
+# The contract requires a non-zero payoutAuthorizer at deploy time.
+# Our Foundry deploy script prefers BACKEND_SIGNER_PRIVATE_KEY (derives the address),
+# but allows PAYOUT_AUTHORIZER as an override.
+if [[ -z "${BACKEND_SIGNER_PRIVATE_KEY:-}" && -z "${PAYOUT_AUTHORIZER:-}" ]]; then
+  echo "Missing BACKEND_SIGNER_PRIVATE_KEY or PAYOUT_AUTHORIZER (required by Deploy.s.sol)" >&2
+  exit 1
+fi
 
-pushd "${CONTRACTS_DIR}" >/dev/null
+chain_id="${CHAIN_ID:-}"
+if [[ -z "$chain_id" ]]; then
+  if command -v cast >/dev/null 2>&1; then
+    chain_id="$(cast chain-id --rpc-url "$RPC_URL" 2>/dev/null || true)"
+  fi
+fi
 
-forge script script/Deploy.s.sol:Deploy \
-  --rpc-url "${RPC_URL}" \
+echo "Deploying GHBounties..."
+[[ -n "${chain_id:-}" ]] && echo "  chainId: $chain_id"
+echo "  rpc: $(rpc_host "$RPC_URL")"
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+pushd "$repo_root/contracts" >/dev/null
+
+forge script \
+  script/Deploy.s.sol:Deploy \
+  --rpc-url "$RPC_URL" \
+  --private-key "$PRIVATE_KEY" \
   --broadcast \
-  --private-key "${PRIVATE_KEY}" \
-  >/dev/null
+  ${FORGE_SCRIPT_FLAGS:-}
 
-RUN_JSON="$(ls -1t "broadcast/Deploy.s.sol/${CHAIN_ID}/run-"*.json | head -n 1)"
-ADDR="$(jq -r '.transactions[] | select(.contractName=="GHBounties") | .contractAddress' "${RUN_JSON}" | tail -n 1)"
+# Best-effort: print deployed address from Foundry broadcast artifact.
+if [[ -n "${chain_id:-}" && -f "broadcast/Deploy.s.sol/$chain_id/run-latest.json" && -x "$(command -v jq)" ]]; then
+  addr="$(jq -r '.receipts[0].contractAddress // empty' "broadcast/Deploy.s.sol/$chain_id/run-latest.json")"
+  if [[ -n "${addr:-}" && "$addr" != "null" ]]; then
+    echo "Deployed at: $addr"
+  fi
+fi
 
 popd >/dev/null
-
-echo "${ADDR}"
