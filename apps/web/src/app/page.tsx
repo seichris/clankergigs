@@ -136,6 +136,7 @@ export default function Home() {
 
   const githubMatch = React.useMemo(() => {
     if (!address || !user) return false;
+    if (ensGithub === "*") return true;
     const record = normalizeGithubUsername(ensGithub);
     if (!record) return false;
     return record.toLowerCase() === user.login.toLowerCase();

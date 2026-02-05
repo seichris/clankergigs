@@ -56,8 +56,9 @@ Why it’s good for demo:
 
 ENS data is primarily on Ethereum mainnet. Even if bounties run on Sepolia/local, ENS reads should use:
 - chain: `mainnet`
-- RPC: `NEXT_PUBLIC_ENS_RPC_URL` (new, optional)
-- fallback RPC: `https://cloudflare-eth.com` (public, rate-limited; fine for hackathon demo)
+- RPC: `NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET` (recommended)
+- (optional) `NEXT_PUBLIC_ENS_RPC_URL` (deprecated override)
+- no hardcoded RPC fallback (set the env var explicitly)
 
 ### Implementation approach (no new deps)
 
@@ -78,7 +79,7 @@ Add small React hooks to wrap these actions and handle:
 ## Work breakdown
 
 ### Phase A — plumbing + hooks
-1. Add `NEXT_PUBLIC_ENS_RPC_URL` to `apps/web/.env.local.example`.
+1. Add `NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET` to `apps/web/.env.local.example` (used for ENS reads).
 2. Add `apps/web/src/lib/ens.ts`:
    - `getEnsPublicClient()` (mainnet client)
    - `isProbablyEnsName(input)` helper
@@ -111,6 +112,16 @@ Add small React hooks to wrap these actions and handle:
 
 ---
 
+## Demo overrides (optional)
+
+For hackathon demos, you can hardcode a “fake” ENS profile for a specific address in the web app (no on-chain ENS setup required):
+
+- `NEXT_PUBLIC_ENS_DEMO_ADDRESS=0xB7De690a60A968FC844148d75bFfF9716382b145`
+- `NEXT_PUBLIC_ENS_DEMO_NAME=clankergigs.eth`
+- `NEXT_PUBLIC_ENS_DEMO_COM_GITHUB=*` (forces the ENS↔GitHub badge to match the connected GitHub user)
+
+---
+
 ## Demo script (60 seconds)
 
 1. Connect wallet that has an ENS reverse record + avatar.
@@ -118,4 +129,3 @@ Add small React hooks to wrap these actions and handle:
 3. Open any issue row → Payout → paste `vitalik.eth`.
 4. Show “Resolves to 0x…” and submit payout.
 5. (Optional) If `com.github` matches: show “ENS ↔ GitHub verified”.
-

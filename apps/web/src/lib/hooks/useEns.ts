@@ -2,7 +2,7 @@ import * as React from "react";
 import type { Address } from "viem";
 import { getEnsAddress, getEnsAvatar, getEnsName, getEnsText, normalize } from "viem/ens";
 
-import { getEnsPublicClient, isProbablyEnsName } from "@/lib/ens";
+import { getDemoEnsNameForAddress, getDemoEnsTextRecord, getEnsPublicClient, isProbablyEnsName } from "@/lib/ens";
 
 function safeNormalizeEnsName(value: string) {
   try {
@@ -25,11 +25,27 @@ export function useEnsPrimaryName(address: Address | null) {
       return;
     }
 
+    const demo = getDemoEnsNameForAddress(address);
+    if (demo) {
+      setName(demo);
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
+    const client = getEnsPublicClient();
+    if (!client) {
+      setName(null);
+      setIsLoading(false);
+      setError("ENS RPC not configured (set NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET).");
+      return;
+    }
+
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
-    getEnsName(getEnsPublicClient(), { address })
+    getEnsName(client, { address })
       .then((next) => {
         if (cancelled) return;
         setName(next);
@@ -81,11 +97,19 @@ export function useEnsAddressForName(name: string | null) {
       return;
     }
 
+    const client = getEnsPublicClient();
+    if (!client) {
+      setAddress(null);
+      setIsLoading(false);
+      setError("ENS RPC not configured (set NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET).");
+      return;
+    }
+
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
-    getEnsAddress(getEnsPublicClient(), { name: normalized })
+    getEnsAddress(client, { name: normalized })
       .then((next) => {
         if (cancelled) return;
         setAddress(next);
@@ -130,11 +154,19 @@ export function useEnsAvatarUrl(name: string | null) {
       return;
     }
 
+    const client = getEnsPublicClient();
+    if (!client) {
+      setAvatarUrl(null);
+      setIsLoading(false);
+      setError("ENS RPC not configured (set NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET).");
+      return;
+    }
+
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
-    getEnsAvatar(getEnsPublicClient(), { name: normalized })
+    getEnsAvatar(client, { name: normalized })
       .then((next) => {
         if (cancelled) return;
         setAvatarUrl(next);
@@ -171,6 +203,14 @@ export function useEnsTextRecord(name: string | null, key: string) {
       return;
     }
 
+    const demo = getDemoEnsTextRecord(trimmed, key);
+    if (demo) {
+      setValue(demo);
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
     const normalized = safeNormalizeEnsName(trimmed);
     if (!normalized) {
       setValue(null);
@@ -179,11 +219,19 @@ export function useEnsTextRecord(name: string | null, key: string) {
       return;
     }
 
+    const client = getEnsPublicClient();
+    if (!client) {
+      setValue(null);
+      setIsLoading(false);
+      setError("ENS RPC not configured (set NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET).");
+      return;
+    }
+
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
-    getEnsText(getEnsPublicClient(), { name: normalized, key })
+    getEnsText(client, { name: normalized, key })
       .then((next) => {
         if (cancelled) return;
         setValue(next);

@@ -66,7 +66,7 @@ export function PayoutDialog({
   const recipientTrimmed = recipient.trim();
   const recipientIsAddress = Boolean(recipientTrimmed && isAddress(recipientTrimmed));
   const recipientLooksEns = Boolean(recipientTrimmed && !recipientIsAddress && isProbablyEnsName(recipientTrimmed));
-  const { address: ensResolvedAddress, isLoading: ensIsResolving } = useEnsAddressForName(
+  const { address: ensResolvedAddress, isLoading: ensIsResolving, error: ensResolveError } = useEnsAddressForName(
     recipientLooksEns ? recipientTrimmed : null
   );
   const { name: reverseEnsName, isLoading: ensReverseIsResolving } = useEnsPrimaryName(
@@ -247,6 +247,8 @@ export function PayoutDialog({
               <div className="text-xs text-muted-foreground">
                 {ensIsResolving ? (
                   "Resolving ENS name…"
+                ) : ensResolveError ? (
+                  <span className="text-amber-600">{ensResolveError}</span>
                 ) : ensResolvedAddress ? (
                   <>Resolves to: <span className="font-mono">{ensResolvedAddress}</span></>
                 ) : (
