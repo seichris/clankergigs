@@ -29,6 +29,7 @@ contracts/broadcast
 *.log
 .DS_Store
 .pnpm-store/
+.tools/
 
 key.pem
 .worktrees/

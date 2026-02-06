@@ -173,7 +173,7 @@ module gh_bounties::gh_bounties {
     let taken = balance::split(&mut bounty.escrow, amount_mist);
     let coin_out = coin::from_balance(taken, ctx);
     event::emit(Payout { bounty_id: object::id(bounty), recipient, amount_mist });
-    transfer::transfer(coin_out, recipient);
+    transfer::public_transfer(coin_out, recipient);
   }
 
   public entry fun refund(
@@ -195,7 +195,10 @@ module gh_bounties::gh_bounties {
     let taken = balance::split(&mut bounty.escrow, receipt.amount_mist);
     let coin_out = coin::from_balance(taken, ctx);
     event::emit(Refund { bounty_id: receipt.bounty_id, funder: sender, amount_mist: receipt.amount_mist });
-    transfer::transfer(coin_out, sender);
-    // receipt is consumed
+    transfer::public_transfer(coin_out, sender);
+
+    // Destroy the receipt object now that it has been refunded.
+    let FundingReceipt { id, bounty_id: _, funder: _, amount_mist: _, locked_until_ms: _ } = receipt;
+    object::delete(id);
   }
 }
