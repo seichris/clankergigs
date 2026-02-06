@@ -42,8 +42,14 @@ export async function queryEventsByPackage(opts: {
   cursor: SuiEventId | null;
   limit: number;
 }) {
+  // Sui RPC expects positional params:
+  //   suix_queryEvents(filter, cursor, limit, descending_order)
+  // And filter is a tagged-union like { MoveEventModule: { package, module } }.
   return suiRpc<QueryEventsResult>(opts.rpcUrl, "suix_queryEvents", [
-    { query: { MoveEventPackage: opts.packageId }, cursor: opts.cursor, limit: opts.limit, descending_order: false }
+    { MoveEventModule: { package: opts.packageId, module: "gh_bounties" } },
+    opts.cursor,
+    opts.limit,
+    false
   ]);
 }
 
