@@ -1,8 +1,20 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ExternalLink, Moon, RefreshCw, Sun } from "lucide-react";
+import { ChevronDown, ExternalLink, Moon, MoreHorizontal, Sun } from "lucide-react";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
+
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 type SuiFunding = {
   funder: string;
@@ -132,39 +144,54 @@ export default function Page() {
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
             <p className="text-sm text-muted-foreground">
-              Sui prototype UI. Read-only indexer viewer today. Wallet connect is wired for upcoming write flows.
+              Fund any Github issue. Claim rewards for solving it. Built for Humans and AI Agents like OpenClaw (start at{" "}
+              <a
+                href="https://github.com/seichris/gh-bounties/blob/main/AGENTS.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-foreground"
+              >
+                AGENTS.md
+              </a>
+              ).
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <span
-              className="inline-flex items-center rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground"
-              title="Configured by NEXT_PUBLIC_SUI_NETWORK"
-            >
+            <Badge variant="outline" title="Configured by NEXT_PUBLIC_SUI_NETWORK">
               {badgeLabel(network)}
-              <ChevronDown className="ml-2 h-4 w-4 opacity-60" />
-            </span>
+            </Badge>
             <ConnectButton
               className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-input bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               connectText={account ? shortHex(account.address) : "Connect wallet"}
             />
-            <button
-              type="button"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="rounded-full">
+                  <Avatar>
+                    <AvatarFallback>GH</AvatarFallback>
+                  </Avatar>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem disabled>GitHub auth not wired for Sui yet</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <a href="https://github.com/seichris/gh-bounties" target="_blank" rel="noopener noreferrer">
+                    View repo
+                  </a>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hover:bg-transparent active:bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
               onClick={toggleTheme}
-              aria-label="Toggle theme"
+              aria-label="Toggle dark mode"
               disabled={!mounted}
             >
               {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
-            <button
-              type="button"
-              className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-input bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-              onClick={() => fetchIssues()}
-              disabled={loading}
-            >
-              <RefreshCw className="h-4 w-4" />
-              Refresh
-            </button>
+            </Button>
           </div>
         </header>
 
@@ -179,89 +206,76 @@ export default function Page() {
         ) : issues.length === 0 ? (
           <div className="rounded-md border bg-card px-4 py-6 text-sm text-muted-foreground">No bounties indexed yet.</div>
         ) : (
-          <div className="space-y-3">
-            {issues.map((issue) => (
-              <div key={issue.bountyObjectId} className="rounded-md border bg-card p-4">
-                <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="space-y-1">
-                    <a
-                      href={issue.issueUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
-                    >
-                      {issue.repo ? issue.repo : "repo"}#{issue.issueNumber}
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                    <div className="text-xs text-muted-foreground">
-                      bounty object:{" "}
-                      <a
-                        href={`${explorerObject.replace(/\/+$/, "")}/${issue.bountyObjectId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-mono hover:underline"
-                      >
-                        {shortHex(issue.bountyObjectId)}
-                      </a>
-                      {" · "}
-                      admin: <span className="font-mono">{shortHex(issue.admin)}</span>
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    escrowed: <span className="font-mono">{toSui(issue.escrowedMist)} SUI</span>
-                  </div>
-                </div>
-
-                <div className="mt-3 grid gap-2 text-xs text-foreground/90 sm:grid-cols-3">
-                  <div>
-                    funded: <span className="font-mono">{toSui(issue.fundedMist)} SUI</span>
-                  </div>
-                  <div>
-                    paid: <span className="font-mono">{toSui(issue.paidMist)} SUI</span>
-                  </div>
-                  <div>
-                    status: <span className="font-mono">{issue.status}</span>
-                  </div>
-                </div>
-
-                {issue.claims && issue.claims.length > 0 ? (
-                  <div className="mt-3 text-xs text-foreground/90">
-                    claims:{" "}
-                    {issue.claims.slice(0, 3).map((c, idx) => (
-                      <span key={`${c.claimer}-${idx}`}>
-                        {idx ? ", " : ""}
-                        <span className="font-mono">{shortHex(c.claimer)}</span>
-                        {c.claimUrl ? (
-                          <>
-                            {" ("}
-                            <a href={c.claimUrl} target="_blank" rel="noreferrer" className="hover:underline">
-                              link
+          <div className="rounded-md border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Issue</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>In active bounty</TableHead>
+                  <TableHead>Admin</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {issues.map((issue) => (
+                  <TableRow key={issue.bountyObjectId}>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <a
+                          href={issue.issueUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 font-medium hover:underline"
+                        >
+                          {issue.repo ? issue.repo : "repo"}#{issue.issueNumber}
+                          <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+                        </a>
+                        <a
+                          href={`${explorerObject.replace(/\/+$/, "")}/${issue.bountyObjectId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-xs text-muted-foreground hover:underline"
+                        >
+                          {shortHex(issue.bountyObjectId)}
+                        </a>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{issue.status}</Badge>
+                    </TableCell>
+                    <TableCell className="font-mono">{toSui(issue.escrowedMist)} SUI</TableCell>
+                    <TableCell className="font-mono">{shortHex(issue.admin)}</TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem asChild>
+                            <a
+                              href={`${explorerObject.replace(/\/+$/, "")}/${issue.bountyObjectId}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              View bounty object
                             </a>
-                            {")"}
-                          </>
-                        ) : null}
-                      </span>
-                    ))}
-                    {issue.claims.length > 3 ? ` (+${issue.claims.length - 3} more)` : ""}
-                  </div>
-                ) : null}
-
-                {issue.fundings && issue.fundings.length > 0 ? (
-                  <div className="mt-2 text-xs text-foreground/90">
-                    funders:{" "}
-                    {Array.from(new Set(issue.fundings.map((f) => f.funder.toLowerCase())))
-                      .slice(0, 4)
-                      .map((f, idx) => (
-                        <span key={f}>
-                          {idx ? ", " : ""}
-                          <span className="font-mono">{shortHex(f)}</span>
-                        </span>
-                      ))}
-                    {issue.fundings.length > 4 ? "…" : ""}
-                  </div>
-                ) : null}
-              </div>
-            ))}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem asChild>
+                            <a href={issue.issueUrl} target="_blank" rel="noreferrer">
+                              View GitHub issue
+                            </a>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         )}
 
