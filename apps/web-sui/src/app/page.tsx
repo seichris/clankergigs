@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
+import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 
 type SuiFunding = {
   funder: string;
@@ -76,6 +77,7 @@ export default function Page() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8788";
   const explorerTx = (process.env.NEXT_PUBLIC_SUI_EXPLORER_TX || "https://suiexplorer.com/txblock/").trim();
   const explorerObject = (process.env.NEXT_PUBLIC_SUI_EXPLORER_OBJECT || "https://suiexplorer.com/object/").trim();
+  const account = useCurrentAccount();
 
   const [issues, setIssues] = React.useState<SuiIssueRow[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -108,16 +110,27 @@ export default function Page() {
           <p className="text-sm text-slate-600">
             Read-only viewer for the Sui indexer. Deploy this at <code className="rounded bg-slate-100 px-1">sui.clankergigs.com</code>.
           </p>
+          <div className="text-xs text-slate-600">
+            wallet:{" "}
+            {account ? (
+              <span className="font-mono">{shortHex(account.address)}</span>
+            ) : (
+              <span className="italic">not connected</span>
+            )}
+          </div>
         </div>
-        <button
-          type="button"
-          className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
-          onClick={() => fetchIssues()}
-          disabled={loading}
-        >
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <ConnectButton />
+          <button
+            type="button"
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+            onClick={() => fetchIssues()}
+            disabled={loading}
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </button>
+        </div>
       </header>
 
       {error ? (
