@@ -5,8 +5,8 @@ import type { Prisma } from "../prisma/generated/client/index.js";
 
 type BountyWithRelations = Prisma.BountyGetPayload<{
   include: {
-    fundings: { select: { funder: true; amountMist: true; lockedUntilMs: true; createdAt: true } };
-    claims: { select: { claimer: true; claimUrl: true; createdAt: true } };
+    fundings: { select: { receiptObjectId: true; funder: true; amountMist: true; lockedUntilMs: true; createdAt: true } };
+    claims: { select: { claimObjectId: true; claimer: true; claimUrl: true; createdAt: true } };
     payouts: { select: { recipient: true; amountMist: true; createdAt: true } };
     refunds: { select: { funder: true; amountMist: true; createdAt: true } };
   };
@@ -26,12 +26,14 @@ function serializeBounty(b: BountyWithRelations) {
     createdAt: b.createdAt.toISOString(),
     updatedAt: b.updatedAt.toISOString(),
     fundings: b.fundings.map((f) => ({
+      receiptObjectId: f.receiptObjectId,
       funder: f.funder,
       amountMist: f.amountMist,
       lockedUntilMs: f.lockedUntilMs.toString(),
       createdAt: f.createdAt.toISOString()
     })),
     claims: b.claims.map((c) => ({
+      claimObjectId: c.claimObjectId,
       claimer: c.claimer,
       claimUrl: c.claimUrl,
       createdAt: c.createdAt.toISOString()
@@ -75,8 +77,8 @@ export async function buildServer() {
       orderBy: { updatedAt: "desc" },
       take,
       include: {
-        fundings: { select: { funder: true, amountMist: true, lockedUntilMs: true, createdAt: true } },
-        claims: { select: { claimer: true, claimUrl: true, createdAt: true } },
+        fundings: { select: { receiptObjectId: true, funder: true, amountMist: true, lockedUntilMs: true, createdAt: true } },
+        claims: { select: { claimObjectId: true, claimer: true, claimUrl: true, createdAt: true } },
         payouts: { select: { recipient: true, amountMist: true, createdAt: true } },
         refunds: { select: { funder: true, amountMist: true, createdAt: true } }
       }
@@ -94,8 +96,8 @@ export async function buildServer() {
     const b = await prisma.bounty.findUnique({
       where: { bountyObjectId },
       include: {
-        fundings: { select: { funder: true, amountMist: true, lockedUntilMs: true, createdAt: true } },
-        claims: { select: { claimer: true, claimUrl: true, createdAt: true } },
+        fundings: { select: { receiptObjectId: true, funder: true, amountMist: true, lockedUntilMs: true, createdAt: true } },
+        claims: { select: { claimObjectId: true, claimer: true, claimUrl: true, createdAt: true } },
         payouts: { select: { recipient: true, amountMist: true, createdAt: true } },
         refunds: { select: { funder: true, amountMist: true, createdAt: true } }
       }
