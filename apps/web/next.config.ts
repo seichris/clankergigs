@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // `@gh-bounties/shared` is a workspace package and may resolve to TS sources via `exports`.
+  // Next does not reliably transpile TS from outside the app unless explicitly configured.
+  transpilePackages: ["@gh-bounties/shared"],
 };
 
 export default nextConfig;
