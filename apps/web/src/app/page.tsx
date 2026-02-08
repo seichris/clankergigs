@@ -57,6 +57,7 @@ export default function Home() {
   const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
   const mainnetWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET || "").trim();
   const sepoliaWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA || "").trim();
+  const suiWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_SUI || "").trim();
   const { address, hasProvider, connect } = useWallet();
   const { user, login, logout } = useGithubUser(apiUrl);
   const { theme, setTheme, mounted } = useTheme();
@@ -160,12 +161,12 @@ export default function Home() {
     return record.toLowerCase() === user.login.toLowerCase();
   }, [address, user, ensGithub]);
 
-  const hasNetworkSwitch = Boolean(mainnetWebOrigin && sepoliaWebOrigin);
+  const hasNetworkSwitch = Boolean(mainnetWebOrigin || sepoliaWebOrigin || suiWebOrigin);
 
   const switchNetwork = React.useCallback(
-    (targetOrigin: string) => {
+    (targetOrigin: string, preservePath = true) => {
       const origin = targetOrigin.replace(/\/+$/, "");
-      const path = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const path = preservePath ? `${window.location.pathname}${window.location.search}${window.location.hash}` : "";
       window.location.href = `${origin}${path}`;
     },
     []
@@ -191,12 +192,22 @@ export default function Home() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem disabled={chainId === 1} onClick={() => switchNetwork(mainnetWebOrigin)}>
+                  {mainnetWebOrigin ? (
+                    <DropdownMenuItem disabled={chainId === 1} onClick={() => switchNetwork(mainnetWebOrigin)}>
                     Ethereum Mainnet
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={chainId === 11155111} onClick={() => switchNetwork(sepoliaWebOrigin)}>
+                    </DropdownMenuItem>
+                  ) : null}
+                  {sepoliaWebOrigin ? (
+                    <DropdownMenuItem disabled={chainId === 11155111} onClick={() => switchNetwork(sepoliaWebOrigin)}>
                     Sepolia
-                  </DropdownMenuItem>
+                    </DropdownMenuItem>
+                  ) : null}
+                  {suiWebOrigin ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => switchNetwork(suiWebOrigin, false)}>Sui</DropdownMenuItem>
+                    </>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
