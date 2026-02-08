@@ -16,7 +16,9 @@ require_env GHB_TOKEN
 usage() {
   cat <<'OUT' >&2
 Usage:
-  10_option2_claim_and_payout.sh --pr-url <url> [--bounty-id <0x..>] [--amount-eth <n>] [--recipient <0x..>] [--auto-fund] [--lock-seconds <n>]
+  10_option2_claim_and_payout.sh --pr-url <url> --issue-url <issue_url> [--amount-eth <n>] [--recipient <0x..>] [--auto-fund] [--lock-seconds <n>]
+  10_option2_claim_and_payout.sh --pr-url <url> --repo <owner/repo> --issue-number <n> [--amount-eth <n>] [--recipient <0x..>] [--auto-fund] [--lock-seconds <n>]
+  10_option2_claim_and_payout.sh --pr-url <url> --bounty-id <0x..> [--amount-eth <n>] [--recipient <0x..>] [--auto-fund] [--lock-seconds <n>]
 
 Env vars (required):
   API_URL, RPC_URL, CONTRACT_ADDRESS, PRIVATE_KEY, GHB_TOKEN
@@ -24,10 +26,14 @@ Env vars (required):
 Notes:
   - Uses Option 2 (device-flow) API tokens: Authorization: Bearer $GHB_TOKEN
   - By default, does NOT fund. Pass --auto-fund to fund the amount if escrow is insufficient.
+  - If you switch networks (mainnet <-> sepolia), make sure API_URL/RPC_URL/CONTRACT_ADDRESS point to the same network.
 OUT
 }
 
-BOUNTY_ID="0xab0b1d96a287876a120600078b9e9c332f06d9221fee7074d2ab4c9cc85f3e64"
+BOUNTY_ID=""
+ISSUE_URL=""
+REPO=""
+ISSUE_NUMBER=""
 PR_URL=""
 AMOUNT_ETH="0.001"
 RECIPIENT=""
@@ -38,6 +44,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --bounty-id)
       BOUNTY_ID="${2:-}"; shift 2;;
+    --issue-url)
+      ISSUE_URL="${2:-}"; shift 2;;
+    --repo)
+      REPO="${2:-}"; shift 2;;
+    --issue-number)
+      ISSUE_NUMBER="${2:-}"; shift 2;;
     --pr-url)
       PR_URL="${2:-}"; shift 2;;
     --amount-eth)
@@ -61,6 +73,29 @@ if [ -z "$PR_URL" ]; then
   echo "Missing required --pr-url" >&2
   usage
   exit 1
+fi
+
+if [ -z "$BOUNTY_ID" ]; then
+  if [ -n "$ISSUE_URL" ]; then
+    if [[ "$ISSUE_URL" =~ github\.com/([^/]+)/([^/]+)/issues/([0-9]+) ]]; then
+      REPO="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+      ISSUE_NUMBER="${BASH_REMATCH[3]}"
+    else
+      echo "Invalid --issue-url (expected https://github.com/<owner>/<repo>/issues/<n>)" >&2
+      exit 1
+    fi
+  fi
+
+  if [ -n "$REPO" ] && [ -n "$ISSUE_NUMBER" ]; then
+    repo_norm="$(normalize_repo "$REPO")"
+    repo_hash="$(cast keccak "$repo_norm")"
+    encoded="$(cast abi-encode "f(bytes32,uint256)" "$repo_hash" "$ISSUE_NUMBER")"
+    BOUNTY_ID="$(cast keccak "$encoded")"
+  else
+    echo "Missing bounty identifier: pass --bounty-id, or --issue-url, or --repo + --issue-number" >&2
+    usage
+    exit 1
+  fi
 fi
 
 if [ -z "$RECIPIENT" ]; then
@@ -127,4 +162,3 @@ echo "--- payout (on-chain)"
 
 echo "--- totals"
 cast call "$CONTRACT_ADDRESS" "getTotals(bytes32,address)(uint256,uint256,uint256)" "$BOUNTY_ID" "$ETH_TOKEN" --rpc-url "$RPC_URL"
-

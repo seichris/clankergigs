@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { loadEnv } from "./env.js";
 import { buildServer } from "./server.js";
 import { startIndexer } from "./indexer/indexer.js";
-import { concatBytes, createPublicClient, http, isAddress, keccak256, parseAbi, stringToHex, toBytes, type Address, type Hex } from "viem";
+import { concatBytes, createPublicClient, fallback, http, isAddress, keccak256, parseAbi, stringToHex, toBytes, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.js";
 import { backfillLinkedPullRequests } from "./github/backfill.js";
@@ -11,10 +11,41 @@ import { createApiSession, resolveGithubAuthFromRequest, revokeApiSession } from
 import { registerTreasuryRoutes } from "./treasury/routes.js";
 import { startTreasuryOrchestrator } from "./treasury/orchestrator.js";
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryAfterMsFromError(err: unknown): number | null {
+  // viem's HttpRequestError usually includes `status` and a human string in `details`.
+  if (!err || typeof err !== "object") return null;
+  const anyErr = err as any;
+  const status = typeof anyErr.status === "number" ? anyErr.status : null;
+  if (status !== 429) return null;
+
+  const details = typeof anyErr.details === "string" ? anyErr.details : "";
+  // Examples seen:
+  //   Retry after 5m0s
+  //   ... Retry after 30s
+  const m = details.match(/retry after\s+(\d+)\s*m\s*(\d+)\s*s/i);
+  if (m) return (Number(m[1]) * 60 + Number(m[2])) * 1000;
+  const s = details.match(/retry after\s+(\d+)\s*s/i);
+  if (s) return Number(s[1]) * 1000;
+
+  // If we know it's 429 but can't parse the window, avoid hot-looping.
+  return 300_000;
+}
+
 async function main() {
   const env = loadEnv();
   // Prisma reads DATABASE_URL from process.env at construction time.
   process.env.DATABASE_URL ||= env.DATABASE_URL;
+
+  if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0 && env.RPC_URLS.length === 0) {
+    throw new Error("RPC not configured. Set RPC_URL (comma-separated ok) or RPC_URLS_ETHEREUM_SEPOLIA/RPC_URLS_ETHEREUM_MAINNET.");
+  }
+
+  const rpcTransport =
+    env.RPC_URLS.length > 1 ? fallback(env.RPC_URLS.map((url) => http(url))) : http(env.RPC_URLS[0] || "");
 
   const githubMode = env.GITHUB_AUTH_MODE ?? "pat";
   const github =
@@ -56,7 +87,7 @@ async function main() {
 
   app.get("/contract", async (req, reply) => {
     if (!env.CONTRACT_ADDRESS) return reply.code(400).send({ error: "CONTRACT_ADDRESS not configured" });
-    const client = createPublicClient({ transport: http(env.RPC_URL) });
+    const client = createPublicClient({ transport: rpcTransport });
     const abi = parseAbi([
       "function payoutAuthorizer() view returns (address)",
       "function dao() view returns (address)",
@@ -313,7 +344,7 @@ async function main() {
 
   // Payout authorization: verify GitHub admin and sign an EIP-712 authorization.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0 && env.BACKEND_SIGNER_PRIVATE_KEY && env.BACKEND_SIGNER_PRIVATE_KEY.length > 0) {
-    const client = createPublicClient({ transport: http(env.RPC_URL) });
+    const client = createPublicClient({ transport: rpcTransport });
     const signer = privateKeyToAccount(env.BACKEND_SIGNER_PRIVATE_KEY as Hex);
 
     const authAbi = parseAbi([
@@ -766,14 +797,34 @@ async function main() {
 
   // Indexer is optional while bootstrapping the UI, but usually you'll set CONTRACT_ADDRESS.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0) {
-    await startIndexer({
-      rpcUrl: env.RPC_URL,
+    const indexerCfg = {
+      rpcUrls: env.RPC_URLS,
       chainId: env.CHAIN_ID,
       contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
       github,
       backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK
-    });
-    app.log.info({ contract: env.CONTRACT_ADDRESS, chainId: env.CHAIN_ID }, "indexer started");
+    };
+
+    // Don't crash the API if RPC is down / rate limited. Keep retrying in the background.
+    void (async () => {
+      let delayMs = 5_000;
+      while (true) {
+        try {
+          await startIndexer(indexerCfg);
+          app.log.info({ contract: env.CONTRACT_ADDRESS, chainId: env.CHAIN_ID }, "indexer started");
+          return;
+        } catch (err: any) {
+          const retryAfterMs = retryAfterMsFromError(err);
+          if (retryAfterMs) delayMs = Math.max(delayMs, retryAfterMs);
+          app.log.error(
+            { err: err?.shortMessage ?? err?.message ?? String(err), delayMs, rpcUrl: env.RPC_URL },
+            "indexer failed to start; retrying"
+          );
+          await sleep(delayMs);
+          delayMs = Math.min(delayMs * 2, 60_000);
+        }
+      }
+    })();
   } else {
     app.log.warn("CONTRACT_ADDRESS is empty; indexer disabled");
   }

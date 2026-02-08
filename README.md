@@ -6,6 +6,13 @@ Humans: Access the full flow via [clankergigs.com](https://www.clankergigs.com).
 
 AI agents: Access via CLI. See [AGENTS.md](AGENTS.md).
 
+## Deployments
+
+| Network | Chain ID | Contract address | Explorer |
+| --- | ---: | --- | --- |
+| Ethereum Mainnet | 1 | `0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04` | https://etherscan.io/address/0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04#code |
+| Sepolia | 11155111 | `0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04` | https://sepolia.etherscan.io/address/0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04#code |
+
 ## Dev
 
 ### High-level overview
@@ -40,8 +47,12 @@ apps/web/
   src/components/     # UI + feature components
   src/lib/            # Client helpers/hooks
 
+apps/api-sui/          # Sui API + indexer (separate stack)
+apps/web-sui/          # Sui web viewer (separate stack)
+
 packages/shared/src/  # Shared helpers (repoHash/bountyId, addresses)
 scripts-for-ai-agents/# CLI agent scripts (cast/curl/jq/gh)
+sui/                  # Sui Move packages
 ```
 
 ### Setup
@@ -84,7 +95,7 @@ To isolate, set a different DB file per branch, e.g.:
    - copy `.env.example` -> `.env`
    - set `RPC_URL` to your Sepolia RPC
    - set `CHAIN_ID=11155111`
-   - (optional) Sepolia deployment: `0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04`
+   - (optional) use the existing Sepolia deployment (see **Deployments** above)
    - set `BACKEND_SIGNER_PRIVATE_KEY` (used by the API to sign payout authorizations; must match the `payoutAuthorizer` set at deploy time). Required for deploys.
    - set GitHub OAuth env vars (used by “Login with GitHub” in the web UI)
 2) Deploy the contract to Sepolia (once per version):
@@ -121,6 +132,16 @@ This repo also supports a **USDC treasury payout rail** that is separate from th
 ### Deploy (Sepolia / Mainnet)
 - Contract deploy prints the deployed address:
   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
+- Recommended: deploy **two separate stacks** (API + DB + web), one per network.
+  - Mainnet stack: `CHAIN_ID=1` + mainnet `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the mainnet web origin.
+  - Sepolia stack: `CHAIN_ID=11155111` + Sepolia `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the Sepolia web origin.
+  - Web network switch (optional): set `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET` and `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA` so users can jump between the two webapps.
+
+### Sui stack (prototype)
+- Sui is implemented as a **separate stack** (do not mix with the EVM API/DB):
+  - `apps/api-sui/` (Sui indexer + API; its own `DATABASE_URL`)
+  - `apps/web-sui/` (Sui web viewer; intended for `sui.clankergigs.com`)
+- See `SUI.md` for the plan and local dev notes.
 
 ## Roadmap
 - Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures

@@ -1,13 +1,23 @@
-import { createPublicClient, createWalletClient, custom, http, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, custom, fallback, http, type Address, type Hex } from "viem";
 import { appChain } from "./chain";
 
 export function getConfig() {
   const chain = appChain();
   const contractAddress = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "") as Hex;
-  const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL || chain.rpcUrls.default.http[0];
+  const rpcUrl = chain.rpcUrls.default.http[0];
 
   if (!contractAddress || !contractAddress.startsWith("0x") || contractAddress.length !== 42) {
     throw new Error("Missing NEXT_PUBLIC_CONTRACT_ADDRESS");
+  }
+
+  if (!rpcUrl) {
+    throw new Error("Missing RPC URL (set NEXT_PUBLIC_RPC_URL, or NEXT_PUBLIC_RPC_URLS_ETHEREUM_SEPOLIA/MAINNET)");
+  }
+
+  if (!/^https?:\/\//i.test(rpcUrl)) {
+    throw new Error(
+      "Invalid RPC URL (must start with http:// or https://). Check for accidental quotes in env vars like NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET."
+    );
   }
 
   return { chain, contractAddress, rpcUrl };
@@ -42,7 +52,9 @@ export async function ensureWalletChain(targetChainId: number) {
 
 export function getPublicClient() {
   const { chain, rpcUrl } = getConfig();
-  return createPublicClient({ chain, transport: http(rpcUrl) });
+  const rpcUrls = chain.rpcUrls.default.http.filter(Boolean);
+  const transport = rpcUrls.length > 1 ? fallback(rpcUrls.map((url) => http(url))) : http(rpcUrl);
+  return createPublicClient({ chain, transport });
 }
 
 export function getWalletClient() {

@@ -1,10 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { Moon, Sun } from "lucide-react";
+import { ChevronDown, Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +21,8 @@ import { TreasuryDialog } from "@/components/treasury-dialog";
 import { createIssueColumns } from "@/components/issues-table/columns";
 import { IssuesDataTable } from "@/components/issues-table/data-table";
 import type { IssueRow } from "@/components/issues-table/types";
+import { normalizeGithubUsername } from "@/lib/ens";
+import { useEnsAvatarUrl, useEnsPrimaryName, useEnsTextRecord } from "@/lib/hooks/useEns";
 import { useGithubUser } from "@/lib/hooks/useGithubUser";
 import { useTheme } from "@/lib/hooks/useTheme";
 import { useWallet } from "@/lib/hooks/useWallet";
@@ -29,11 +32,42 @@ function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+function addressGradientStyle(addr: string) {
+  const hex = addr.toLowerCase().replace(/^0x/, "");
+  const a = parseInt(hex.slice(0, 6), 16) % 360;
+  const b = parseInt(hex.slice(6, 12), 16) % 360;
+  return {
+    backgroundImage: `linear-gradient(135deg, hsl(${a} 70% 55%), hsl(${b} 70% 55%))`,
+  } as React.CSSProperties;
+}
+
+function chainLabel(chainId: number) {
+  if (chainId === 1) return "Ethereum";
+  if (chainId === 11155111) return "Sepolia";
+  if (chainId === 31337) return "Local";
+  return `Chain ${chainId}`;
+}
+
+function errorMessage(err: unknown) {
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === "string" && msg.length > 0) return msg;
+  }
+  return String(err);
+}
+
 export default function Home() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
+  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const mainnetWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET || "").trim();
+  const sepoliaWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA || "").trim();
+  const suiWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_SUI || "").trim();
   const { address, hasProvider, connect } = useWallet();
   const { user, login, logout } = useGithubUser(apiUrl);
   const { theme, setTheme, mounted } = useTheme();
+  const { name: ensName } = useEnsPrimaryName(address);
+  const { avatarUrl: ensAvatarUrl } = useEnsAvatarUrl(ensName);
+  const { value: ensGithub } = useEnsTextRecord(ensName && user ? ensName : null, "com.github");
 
   const [issues, setIssues] = React.useState<IssueRow[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -61,8 +95,8 @@ export default function Home() {
       if (!res.ok) throw new Error(`Failed to load issues (${res.status})`);
       const json = (await res.json()) as { issues?: IssueRow[] };
       setIssues(json?.issues ?? []);
-    } catch (err: any) {
-      setError(err?.message ?? String(err));
+    } catch (err: unknown) {
+      setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -245,26 +279,68 @@ export default function Home() {
     [address]
   );
 
+  const githubMatch = React.useMemo(() => {
+    if (!address || !user) return false;
+    if (ensGithub === "*") return true;
+    const record = normalizeGithubUsername(ensGithub);
+    if (!record) return false;
+    return record.toLowerCase() === user.login.toLowerCase();
+  }, [address, user, ensGithub]);
+
+  const hasNetworkSwitch = Boolean(mainnetWebOrigin || sepoliaWebOrigin || suiWebOrigin);
+
+  const switchNetwork = React.useCallback(
+    (targetOrigin: string, preservePath = true) => {
+      const origin = targetOrigin.replace(/\/+$/, "");
+      const path = preservePath ? `${window.location.pathname}${window.location.search}${window.location.hash}` : "";
+      window.location.href = `${origin}${path}`;
+    },
+    []
+  );
+
   return (
     <main className="min-h-screen">
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6">
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
-            <h1 className="text-3xl font-semibold tracking-tight">Issues with bounties</h1>
+            {/* <h1 className="text-3xl font-semibold tracking-tight">Issues with bounties</h1> */}
             <p className="text-sm text-muted-foreground">
-              Track every issue that has an active or historical bounty, then fund or top up in a few clicks.
+              Fund any Github issue. Claim rewards for solving it. Built for Humans and AI Agents like OpenClaw (start at <a href="https://github.com/seichris/gh-bounties/blob/main/AGENTS.md" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">AGENTS.md</a>).
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              aria-label="Toggle dark mode"
-              disabled={!mounted}
-            >
-              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
+            {hasNetworkSwitch ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline">
+                    {chainLabel(chainId)}
+                    <ChevronDown className="ml-2 h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {mainnetWebOrigin ? (
+                    <DropdownMenuItem disabled={chainId === 1} onClick={() => switchNetwork(mainnetWebOrigin)}>
+                    Ethereum Mainnet
+                    </DropdownMenuItem>
+                  ) : null}
+                  {sepoliaWebOrigin ? (
+                    <DropdownMenuItem disabled={chainId === 11155111} onClick={() => switchNetwork(sepoliaWebOrigin)}>
+                    Sepolia
+                    </DropdownMenuItem>
+                  ) : null}
+                  {suiWebOrigin ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => switchNetwork(suiWebOrigin, false)}>Sui</DropdownMenuItem>
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Badge variant="outline" title="Configured by NEXT_PUBLIC_CHAIN_ID">
+                {chainLabel(chainId)}
+              </Badge>
+            )}
             {!address ? (
               <Button
                 variant="outline"
@@ -274,9 +350,23 @@ export default function Home() {
                 {hasProvider ? "Connect wallet" : "No wallet detected"}
               </Button>
             ) : (
-              <Button variant="outline" onClick={() => navigator.clipboard.writeText(address)}>
-                {shortAddress(address)}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" onClick={() => navigator.clipboard.writeText(address)}>
+                  <Avatar className="h-5 w-5">
+                    {ensAvatarUrl ? <AvatarImage src={ensAvatarUrl} alt={ensName || "ENS avatar"} /> : null}
+                    <AvatarFallback style={addressGradientStyle(address)} />
+                  </Avatar>
+                  {ensName || shortAddress(address)}
+                </Button>
+                {githubMatch ? (
+                  <Badge
+                    variant="outline"
+                    title="ENS text record com.github matches your connected GitHub account."
+                  >
+                    Verified GitHub on ENS
+                  </Badge>
+                ) : null}
+              </div>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -299,6 +389,16 @@ export default function Home() {
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hover:bg-transparent active:bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              aria-label="Toggle dark mode"
+              disabled={!mounted}
+            >
+              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Button>
           </div>
         </header>
 

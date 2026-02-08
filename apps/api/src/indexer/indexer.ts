@@ -1,12 +1,13 @@
 import { getPrisma } from "../db.js";
 import { ghBountiesAbi } from "./abi.js";
-import { createPublicClient, http, isAddress, formatUnits, type Hex } from "viem";
+import { createPublicClient, fallback, http, isAddress, formatUnits, type Hex } from "viem";
+import { mainnet, sepolia } from "viem/chains";
 import { syncBountyLabels } from "../github/labels.js";
 import { postIssueComment } from "../github/comments.js";
 import type { GithubAuthConfig } from "../github/appAuth.js";
 
 type IndexerConfig = {
-  rpcUrl: string;
+  rpcUrls: string[];
   chainId: number;
   contractAddress: Hex;
   github?: GithubAuthConfig | null;
@@ -98,10 +99,14 @@ async function bumpAssetTotals(prisma: any, bountyId: Hex, token: string, delta:
 export async function startIndexer(cfg: IndexerConfig) {
   const prisma = getPrisma();
   if (!isAddress(cfg.contractAddress)) throw new Error("Invalid CONTRACT_ADDRESS");
+  if (!cfg.rpcUrls || cfg.rpcUrls.length === 0) throw new Error("RPC URL(s) not configured");
   const contractAddress = cfg.contractAddress.toLowerCase() as Hex;
 
+  const transport = cfg.rpcUrls.length > 1 ? fallback(cfg.rpcUrls.map((url) => http(url))) : http(cfg.rpcUrls[0]!);
+  const chain = cfg.chainId === 1 ? mainnet : cfg.chainId === 11155111 ? sepolia : undefined;
   const client = createPublicClient({
-    transport: http(cfg.rpcUrl)
+    chain,
+    transport,
   });
 
   // Backfill from last indexed block (or from current head - 2k as a safe-ish dev default).
@@ -121,6 +126,29 @@ export async function startIndexer(cfg: IndexerConfig) {
       for (const log of logs) await handleLog(client, { ...cfg, contractAddress }, log, { isBackfill: false });
     }
   });
+
+  // Safety net: also poll for new logs and backfill from the last stored block.
+  // This keeps the UI updating even if watchContractEvent is unreliable in some hosting setups.
+  let pollInFlight = false;
+  setInterval(async () => {
+    if (pollInFlight) return;
+    pollInFlight = true;
+    try {
+      const headNow = await client.getBlockNumber();
+      const st = await prisma.indexerState.findUnique({
+        where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress } }
+      });
+      const last = BigInt(st?.lastBlock ?? 0);
+      const from = last > 0n ? last + 1n : headNow;
+      if (from <= headNow) {
+        await backfill(client, { ...cfg, contractAddress }, from, headNow);
+      }
+    } catch {
+      // Best-effort: don't crash the API if the indexer poll fails.
+    } finally {
+      pollInFlight = false;
+    }
+  }, 30_000);
 }
 
 async function backfill(

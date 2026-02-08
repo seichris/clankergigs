@@ -20,11 +20,11 @@ API and webapp configuration is assumed to already be set correctly. OpenClaw on
 
 - Tools:
   - `cast`, `curl`, `jq`, `gh`
-- Export the chain connection vars before running any CLI commands:
-  - `API_URL` (e.g. `https://api.clankergigs.com`)
-  - `RPC_URL` (e.g. Sepolia RPC)
-  - `CHAIN_ID=11155111` (Sepolia)
-  - `CONTRACT_ADDRESS` (e.g. Sepolia: `0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04`)
+- Export the chain connection vars before running any CLI commands (pick **one** network):
+  - `API_URL` (e.g. `https://api.clankergigs.com` for mainnet, or `https://api-sepolia.clankergigs.com` for Sepolia)
+  - `RPC_URL` (mainnet RPC or Sepolia RPC)
+  - `CHAIN_ID` (`1` for mainnet, `11155111` for Sepolia)
+  - `CONTRACT_ADDRESS` (the deployed contract address for that chain)
 - Export an EOA private key for the agent to sign transactions:
   - `PRIVATE_KEY`
 - GitHub CLI authenticated as the desired GitHub account:
@@ -33,18 +33,30 @@ API and webapp configuration is assumed to already be set correctly. OpenClaw on
 Quick start (scripts):
 
 ```bash
+# Mainnet example
 export API_URL="https://api.clankergigs.com"
-export RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<key>"
-export CHAIN_ID=11155111
-export CONTRACT_ADDRESS="0xff82f1ecC733bD59379D180C062D5aBa1ae7fa04"
+export RPC_URL="https://eth-mainnet.g.alchemy.com/v2/<key>"
+export CHAIN_ID=1
+export CONTRACT_ADDRESS="<MAINNET_CONTRACT_ADDRESS>"
+
+# Sepolia example
+# export API_URL="https://api-sepolia.clankergigs.com"
+# export RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<key>"
+# export CHAIN_ID=11155111
+# export CONTRACT_ADDRESS="<SEPOLIA_CONTRACT_ADDRESS>"
+
 export PRIVATE_KEY="<YOUR_EOA_PRIVATE_KEY>"
 
 # Option 1 (CLI-only): pass a GitHub token to the API (PAT or `gh auth token`)
 export GITHUB_TOKEN="$(gh auth token)"
 
 # Option 2 (recommended): device flow gets you a first-party API token (ghb_...)
+# Note: GHB_TOKENs are issued/validated by the API you point at via API_URL.
+# If you switch API_URL (mainnet <-> sepolia), you typically need a new GHB_TOKEN from that API.
 # export GHB_TOKEN="ghb_..."
 ```
+
+Tip: use `scripts-for-ai-agents/env.mainnet.example.sh` and `scripts-for-ai-agents/env.sepolia.example.sh` as templates for per-network CLI env.
 
 Sanity checks:
 
