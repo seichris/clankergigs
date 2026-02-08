@@ -8,6 +8,8 @@ out
 .env.*
 !.env.example
 !apps/web/.env.local.example
+!apps/web-sui/.env.local.example
+!apps/api-sui/.env.example
 apps/api/.env
 apps/web/.env.local
 
@@ -18,6 +20,8 @@ apps/api/prisma/prisma/*.db
 apps/api/prisma/.env
 apps/api/src/generated/
 
+apps/api-sui/prisma/generated/
+
 contracts/out
 contracts/cache
 contracts/broadcast
@@ -25,6 +29,7 @@ contracts/broadcast
 *.log
 .DS_Store
 .pnpm-store/
+.tools/
 
 key.pem
 .worktrees/
