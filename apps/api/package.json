@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "prisma generate && tsc -p tsconfig.json",
+    "build": "pnpm -C ../../packages/shared build && prisma generate && tsc -p tsconfig.json",
     "lint": "eslint .",
     "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
     "format": "prettier -w .",
