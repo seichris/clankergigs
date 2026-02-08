@@ -12,6 +12,7 @@ type IndexerConfig = {
   contractAddress: Hex;
   github?: GithubAuthConfig | null;
   backfillBlockChunk?: number;
+  labelOnBackfill?: boolean;
 };
 
 type PublicClient = ReturnType<typeof createPublicClient>;
@@ -242,7 +243,7 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         }
       });
 
-      if (!opts?.isBackfill) {
+      if (!opts?.isBackfill || cfg.labelOnBackfill) {
         // Best-effort label sync if metadataURI is a GitHub issue URL.
         try {
           await syncBountyLabels({ github: cfg.github ?? null, issueUrl: metadataURI, status: "OPEN" });

@@ -802,7 +802,8 @@ async function main() {
       chainId: env.CHAIN_ID,
       contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
       github,
-      backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK
+      backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK,
+      labelOnBackfill: env.LABEL_ON_BACKFILL === 1
     };
 
     // Don't crash the API if RPC is down / rate limited. Keep retrying in the background.

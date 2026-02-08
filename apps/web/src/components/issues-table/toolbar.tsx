@@ -6,6 +6,7 @@ import { CheckCircle2, Circle, Tag, User, UserRound, X, XCircle } from "lucide-r
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { GITHUB_POST_LOGIN_HINT_KEY } from "@/lib/hooks/useGithubUser";
 
 import type { IssueRow } from "./types";
 import { DataTableFacetedFilter } from "./data-table-faceted-filter";
@@ -75,14 +76,48 @@ export function DataTableToolbar({
       });
     });
   }, [githubUser, table]);
+
+  // Only show the "Your repo(s) has active bounties" hint after the user explicitly initiates
+  // GitHub login (not on every reload where an auth cookie still exists).
+  const [postLoginHintPending, setPostLoginHintPending] = React.useState(false);
+  React.useEffect(() => {
+    try {
+      setPostLoginHintPending(sessionStorage.getItem(GITHUB_POST_LOGIN_HINT_KEY) === "1");
+    } catch {
+      setPostLoginHintPending(false);
+    }
+  }, []);
+
   const [ownerHighlightActive, setOwnerHighlightActive] = React.useState(false);
   const [ownerHighlightDismissed, setOwnerHighlightDismissed] = React.useState(false);
 
   React.useEffect(() => {
+    if (!postLoginHintPending) return;
+
+    // Wait until we actually have a logged-in GitHub user and rows to evaluate.
+    if (!githubUser) return;
+    const hasRows = table.getPreFilteredRowModel().rows.length > 0;
+    if (!hasRows) return;
+
     if (highlightOwner && !ownerHighlightDismissed) {
       setOwnerHighlightActive(true);
+      try {
+        sessionStorage.removeItem(GITHUB_POST_LOGIN_HINT_KEY);
+      } catch {
+        // ignore
+      }
+      setPostLoginHintPending(false);
+      return;
     }
-  }, [highlightOwner, ownerHighlightDismissed]);
+
+    // If the user just logged in but doesn't have active bounties, consume the hint anyway.
+    try {
+      sessionStorage.removeItem(GITHUB_POST_LOGIN_HINT_KEY);
+    } catch {
+      // ignore
+    }
+    setPostLoginHintPending(false);
+  }, [githubUser, highlightOwner, ownerHighlightDismissed, postLoginHintPending, table]);
 
   return (
     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">

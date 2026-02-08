@@ -13,6 +13,13 @@ function nowMs() {
   return Date.now();
 }
 
+function parseOriginCsv(value: string | undefined): string[] {
+  return (value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function randomHex(bytes: number) {
   return crypto.randomBytes(bytes).toString("hex");
 }
@@ -81,7 +88,8 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
   app.get("/auth/github/start", async (req, reply) => {
     const clientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.GITHUB_CLIENT_ID || "";
     const callbackUrl = process.env.GITHUB_OAUTH_CALLBACK_URL || "";
-    const webOrigin = process.env.WEB_ORIGIN || "http://localhost:3000";
+    const webOrigins = parseOriginCsv(process.env.WEB_ORIGIN);
+    const webOrigin = webOrigins[0] || "http://localhost:3000";
     const scope = process.env.GITHUB_OAUTH_SCOPE || "";
 
     if (!clientId || !callbackUrl) {
@@ -91,10 +99,11 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
     const q = req.query as any;
     const returnTo = typeof q?.returnTo === "string" ? q.returnTo : webOrigin;
     const allowedCsv = (process.env.ALLOWED_RETURN_TO_ORIGINS || "").trim();
+    const apiOrigins = parseOriginCsv(process.env.API_ORIGIN);
     const allowed =
       allowedCsv.length > 0
-        ? allowedCsv.split(",").map((s) => s.trim()).filter(Boolean)
-        : [webOrigin, process.env.API_ORIGIN || ""].filter(Boolean);
+        ? parseOriginCsv(allowedCsv)
+        : [...webOrigins, ...apiOrigins].filter(Boolean);
 
     const ok = allowed.some((origin) => returnTo.startsWith(origin));
     if (!ok) {
@@ -117,7 +126,8 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
     const clientId = process.env.GITHUB_OAUTH_CLIENT_ID || process.env.GITHUB_CLIENT_ID || "";
     const clientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET || process.env.GITHUB_CLIENT_SECRET || "";
     const callbackUrl = process.env.GITHUB_OAUTH_CALLBACK_URL || "";
-    const webOrigin = process.env.WEB_ORIGIN || "http://localhost:3000";
+    const webOrigins = parseOriginCsv(process.env.WEB_ORIGIN);
+    const webOrigin = webOrigins[0] || "http://localhost:3000";
 
     if (!clientId || !clientSecret || !callbackUrl) {
       return reply.code(500).send({ error: "GitHub OAuth not configured" });

@@ -43,7 +43,7 @@ function addressGradientStyle(addr: string) {
 
 function chainLabel(chainId: number) {
   if (chainId === 1) return "Ethereum + Arc";
-  if (chainId === 11155111) return "Sepolia";
+  if (chainId === 11155111) return "Sepolia + Arc";
   if (chainId === 31337) return "Local";
   return `Chain ${chainId}`;
 }
@@ -320,12 +320,12 @@ export default function Home() {
                 <DropdownMenuContent align="end">
                   {mainnetWebOrigin ? (
                     <DropdownMenuItem disabled={chainId === 1} onClick={() => switchNetwork(mainnetWebOrigin)}>
-                    Ethereum + Arc
+                      {chainLabel(1)}
                     </DropdownMenuItem>
                   ) : null}
                   {sepoliaWebOrigin ? (
                     <DropdownMenuItem disabled={chainId === 11155111} onClick={() => switchNetwork(sepoliaWebOrigin)}>
-                    Sepolia
+                      {chainLabel(11155111)}
                     </DropdownMenuItem>
                   ) : null}
                   {suiWebOrigin ? (
