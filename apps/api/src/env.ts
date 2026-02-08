@@ -70,10 +70,35 @@ type ParsedEnv = z.infer<typeof EnvSchema>;
 
 export type Env = ParsedEnv & { RPC_URLS: string[] };
 
+function sanitizeRpcUrl(input: string) {
+  let url = input.trim();
+  if (!url) return "";
+  // Handle values pasted with quotes (common in hosting dashboards), e.g. `"https://..."`.
+  url = url.replace(/^['"`]+/, "").replace(/['"`]+$/, "").trim();
+  // Handle common typo: `https:/host` (missing one slash).
+  url = url.replace(/^(https?):\/(?!\/)/i, "$1://");
+  return url;
+}
+
 function parseRpcUrls(value: string | undefined) {
-  return (value || "")
+  const raw = (value || "").trim();
+  if (!raw) return [];
+
+  // Allow JSON array syntax in envs, e.g. `["https://a","https://b"]`.
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((v) => sanitizeRpcUrl(String(v))).filter(Boolean);
+      }
+    } catch {
+      // fall through to comma-separated parsing
+    }
+  }
+
+  return raw
     .split(",")
-    .map((url) => url.trim())
+    .map((url) => sanitizeRpcUrl(url))
     .filter(Boolean);
 }
 

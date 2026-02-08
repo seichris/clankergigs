@@ -237,7 +237,7 @@ export default function Home() {
                     variant="outline"
                     title="ENS text record com.github matches your connected GitHub account."
                   >
-                    ENS ↔ GitHub
+                    Verified GitHub on ENS
                   </Badge>
                 ) : null}
               </div>

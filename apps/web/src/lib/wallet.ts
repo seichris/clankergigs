@@ -14,6 +14,12 @@ export function getConfig() {
     throw new Error("Missing RPC URL (set NEXT_PUBLIC_RPC_URL, or NEXT_PUBLIC_RPC_URLS_ETHEREUM_SEPOLIA/MAINNET)");
   }
 
+  if (!/^https?:\/\//i.test(rpcUrl)) {
+    throw new Error(
+      "Invalid RPC URL (must start with http:// or https://). Check for accidental quotes in env vars like NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET."
+    );
+  }
+
   return { chain, contractAddress, rpcUrl };
 }
 

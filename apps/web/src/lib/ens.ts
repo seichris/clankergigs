@@ -3,10 +3,32 @@ import { mainnet } from "viem/chains";
 
 let ensClient: ReturnType<typeof createPublicClient> | null = null;
 
+function sanitizeRpcUrl(input: string) {
+  let url = input.trim();
+  if (!url) return "";
+  url = url.replace(/^['"`]+/, "").replace(/['"`]+$/, "").trim();
+  url = url.replace(/^(https?):\/(?!\/)/i, "$1://");
+  return url;
+}
+
 function parseRpcUrls(value: string | undefined) {
-  return (value || "")
+  const raw = (value || "").trim();
+  if (!raw) return [];
+
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((v) => sanitizeRpcUrl(String(v))).filter(Boolean);
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  return raw
     .split(",")
-    .map((url) => url.trim())
+    .map((url) => sanitizeRpcUrl(url))
     .filter(Boolean);
 }
 
