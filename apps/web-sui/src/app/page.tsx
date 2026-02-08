@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ExternalLink, Moon, MoreHorizontal, Sun } from "lucide-react";
+import { ExternalLink, Moon, MoreHorizontal, Sun } from "lucide-react";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 
 import { Button } from "@/components/ui/button";
@@ -102,6 +102,7 @@ export default function Page() {
   const [issues, setIssues] = React.useState<SuiIssueRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [fundCtaOpen, setFundCtaOpen] = React.useState(false);
   const [mounted, setMounted] = React.useState(false);
   const [theme, setTheme] = React.useState<"light" | "dark">("light");
 
@@ -138,11 +139,18 @@ export default function Page() {
     setTheme(next);
   }, [theme]);
 
+  const handleAddIssue = React.useCallback(() => {
+    // Sui web is currently read-only. This keeps UI parity with EVM web without
+    // pretending the write flows are available yet.
+    setFundCtaOpen(true);
+  }, []);
+
   return (
     <main className="min-h-screen">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-6">
+      <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6">
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
+            <h1 className="text-2xl font-semibold tracking-tight">ClankerGigs</h1>
             <p className="text-sm text-muted-foreground">
               Fund any Github issue. Claim rewards for solving it. Built for Humans and AI Agents like OpenClaw (start at{" "}
               <a
@@ -160,6 +168,9 @@ export default function Page() {
             <Badge variant="outline" title="Configured by NEXT_PUBLIC_SUI_NETWORK">
               {badgeLabel(network)}
             </Badge>
+            <Button size="sm" onClick={handleAddIssue} disabled={!account}>
+              Add issue / fund bounty
+            </Button>
             <ConnectButton
               className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-input bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               connectText={account ? shortHex(account.address) : "Connect wallet"}
@@ -201,24 +212,57 @@ export default function Page() {
           </div>
         ) : null}
 
-        {loading ? (
-          <div className="rounded-md border bg-card px-4 py-6 text-sm text-muted-foreground">Loading…</div>
-        ) : issues.length === 0 ? (
-          <div className="rounded-md border bg-card px-4 py-6 text-sm text-muted-foreground">No bounties indexed yet.</div>
-        ) : (
-          <div className="rounded-md border bg-card">
-            <Table>
-              <TableHeader>
+        {fundCtaOpen ? (
+          <div className="rounded-md border bg-card px-4 py-3 text-sm text-muted-foreground">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <p>
+                The Sui web UI is currently read-only (viewer). The button is here for parity with mainnet/sepolia; write
+                flows (create/fund/claim/payout) are still TODO.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button asChild variant="outline" size="sm">
+                  <a
+                    href="https://github.com/seichris/gh-bounties/blob/main/README-SUI.md"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Sui docs
+                  </a>
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setFundCtaOpen(false)}>
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="rounded-md border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Issue</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>In active bounty</TableHead>
+                <TableHead>Admin</TableHead>
+                <TableHead className="w-10" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead>Issue</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>In active bounty</TableHead>
-                  <TableHead>Admin</TableHead>
-                  <TableHead className="w-10" />
+                  <TableCell colSpan={5} className="px-4 py-6 text-sm text-muted-foreground">
+                    Loading…
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {issues.map((issue) => (
+              ) : issues.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="px-4 py-6 text-sm text-muted-foreground">
+                    No bounties indexed yet.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                issues.map((issue) => (
                   <TableRow key={issue.bountyObjectId}>
                     <TableCell>
                       <div className="flex flex-col gap-1">
@@ -273,11 +317,11 @@ export default function Page() {
                       </DropdownMenu>
                     </TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
 
         <footer className="text-xs text-muted-foreground">
           API: <code className="rounded bg-accent px-1">{apiUrl}</code>
