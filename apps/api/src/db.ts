@@ -1,4 +1,5 @@
-import { PrismaClient } from "@prisma/client";
+// Import from /src so both tsx (dev) and dist/ runtime can resolve without copying generated files.
+import { PrismaClient } from "../src/generated/prisma/index.js";
 
 let prisma: PrismaClient | null = null;
 

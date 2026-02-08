@@ -26,6 +26,7 @@ interface DataTableFacetedFilterProps<TData, TValue> {
   onSelectedValuesChange?: (next: Set<string>) => void;
   className?: string;
   highlight?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export function DataTableFacetedFilter<TData, TValue>({
@@ -36,6 +37,7 @@ export function DataTableFacetedFilter<TData, TValue>({
   onSelectedValuesChange,
   className,
   highlight,
+  onOpenChange,
 }: DataTableFacetedFilterProps<TData, TValue>) {
   const facets = column?.getFacetedUniqueValues();
   const filterValue = column?.getFilterValue();
@@ -59,7 +61,7 @@ export function DataTableFacetedFilter<TData, TValue>({
   );
 
   return (
-    <Popover>
+    <Popover onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"

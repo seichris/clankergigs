@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../../src/generated/prisma/index.js";
 import { getGithubToken, type GithubAuthConfig } from "./appAuth.js";
 import { parseGithubIssueUrl } from "./parse.js";
 

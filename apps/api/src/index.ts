@@ -8,6 +8,8 @@ import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.j
 import { backfillLinkedPullRequests } from "./github/backfill.js";
 import { getPrisma } from "./db.js";
 import { createApiSession, resolveGithubAuthFromRequest, revokeApiSession } from "./auth/sessions.js";
+import { registerTreasuryRoutes } from "./treasury/routes.js";
+import { startTreasuryOrchestrator } from "./treasury/orchestrator.js";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -56,6 +58,7 @@ async function main() {
         : null;
 
   const app = await buildServer({ github });
+  registerTreasuryRoutes(app);
 
   app.get("/id", async (req, reply) => {
     const q = req.query as { repo?: string; issue?: string };
@@ -107,6 +110,52 @@ async function main() {
       daoDelaySeconds: daoDelaySeconds.toString(),
       defaultLockDuration: defaultLockDuration.toString()
     });
+  });
+
+  app.get("/github/admin", async (req, reply) => {
+    const q = req.query as { bountyId?: string };
+    if (!q.bountyId) return reply.code(400).send({ error: "Missing bountyId", isAdmin: false });
+
+    const { githubToken } = await resolveGithubAuthFromRequest(req);
+    if (!githubToken) return reply.code(401).send({ error: "Missing GitHub auth", isAdmin: false });
+
+    const prisma = getPrisma();
+    const bounty = await prisma.bounty.findUnique({ where: { bountyId: q.bountyId } });
+    if (!bounty) return reply.code(404).send({ error: "Unknown bountyId", isAdmin: false });
+
+    let owner: string;
+    let repo: string;
+    try {
+      const parsed = parseGithubIssueUrl(bounty.metadataURI);
+      owner = parsed.owner;
+      repo = parsed.repo;
+    } catch {
+      return reply.code(400).send({ error: `Bounty metadataURI is not a GitHub issue URL: ${bounty.metadataURI}`, isAdmin: false });
+    }
+
+    const ghHeaders = {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "gh-bounties"
+    } as Record<string, string>;
+
+    let ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: { ...ghHeaders, Authorization: `Bearer ${githubToken}` }
+    });
+    if (ghRes.status === 401) {
+      ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+        headers: { ...ghHeaders, Authorization: `token ${githubToken}` }
+      });
+    }
+    if (!ghRes.ok) {
+      const text = await ghRes.text().catch(() => "");
+      return reply.code(403).send({ error: `GitHub API error (${ghRes.status}): ${text || ghRes.statusText}`, isAdmin: false });
+    }
+    const ghData = (await ghRes.json()) as any;
+    if (!ghData?.permissions?.admin) {
+      return reply.code(403).send({ error: "GitHub user is not a repo admin", isAdmin: false });
+    }
+
+    return reply.send({ isAdmin: true });
   });
 
   // ---- CLI device flow (Option 2) ----
@@ -778,6 +827,10 @@ async function main() {
     })();
   } else {
     app.log.warn("CONTRACT_ADDRESS is empty; indexer disabled");
+  }
+
+  if (env.TREASURY_ENABLED) {
+    startTreasuryOrchestrator(app.log);
   }
 
   if (env.GITHUB_BACKFILL_INTERVAL_MINUTES > 0) {

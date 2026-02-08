@@ -63,6 +63,27 @@ const EnvSchema = z.object({
     )
     .optional()
     .default("pat"),
+  // ---- Treasury / Circle (optional) ----
+  TREASURY_ENABLED: z.coerce.number().int().min(0).max(1).default(0),
+  TREASURY_ARC_CHAIN_ID: z.coerce.number().int().positive().default(5042002),
+  TREASURY_ARC_RPC_URL: z.string().optional().or(z.literal("")).default("https://rpc.testnet.arc.network"),
+  TREASURY_ADDRESS: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{40}$/)
+    .optional()
+    .or(z.literal("")),
+  TREASURY_DESTINATION_CALLER_PRIVATE_KEY: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{64}$/)
+    .optional()
+    .or(z.literal("")),
+  TREASURY_ORCHESTRATOR_ENABLED: z.coerce.number().int().min(0).max(1).default(1),
+  TREASURY_ORCHESTRATOR_INTERVAL_MS: z.coerce.number().int().min(250).default(2500),
+  CIRCLE_GATEWAY_API_URL: z.string().optional().or(z.literal("")).default("https://gateway-api-testnet.circle.com"),
+  // Circle Wallets (optional; enables Bridge Kit Circle Wallets adapter)
+  CIRCLE_API_KEY: z.string().optional().or(z.literal("")),
+  CIRCLE_ENTITY_SECRET: z.string().optional().or(z.literal("")),
+  CIRCLE_WALLETS_BASE_URL: z.string().optional().or(z.literal("")),
   PORT: z.coerce.number().int().positive().default(8787)
 });
 
@@ -104,6 +125,12 @@ function parseRpcUrls(value: string | undefined) {
 
 export function loadEnv(): Env {
   dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || "../../.env" });
+  // Optional branch-specific DB override.
+  // If DATABASE_URL is unset, allow DATABASE_URL_FEAT_ARC to provide an alternate SQLite file
+  // so feature-branch migrations don't touch your main-branch local DB.
+  if (!process.env.DATABASE_URL && process.env.DATABASE_URL_FEAT_ARC) {
+    process.env.DATABASE_URL = process.env.DATABASE_URL_FEAT_ARC;
+  }
   const parsed = EnvSchema.safeParse(process.env);
   if (!parsed.success) {
     // Keep the error readable in CLI.
