@@ -1,4 +1,4 @@
-# Sui Web Write Flows (Create/Fund/Claim/Payout) Implementation Plan
+# Sui Web Write Flows (Create/Fund/Claim/Payout) Implementation Plan 
 
 Target: https://sui.clankergigs.com (repo: `apps/web-sui`)
 
