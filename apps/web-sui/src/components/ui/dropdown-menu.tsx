@@ -18,10 +18,6 @@ type DropdownMenuItemProps = React.ComponentPropsWithoutRef<typeof DropdownMenuP
   inset?: boolean;
 };
 
-type DropdownMenuLabelProps = React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label> & {
-  inset?: boolean;
-};
-
 const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
   DropdownMenuSubTriggerProps
@@ -104,4 +100,3 @@ export {
   DropdownMenuSubTrigger,
   DropdownMenuRadioGroup,
 };
-
