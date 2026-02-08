@@ -1,8 +1,20 @@
 "use client";
 
 import * as React from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink, Moon, MoreHorizontal, Sun } from "lucide-react";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
+
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 type SuiFunding = {
   funder: string;
@@ -73,15 +85,26 @@ function toSui(mistStr: string) {
   }
 }
 
+function badgeLabel(network: string) {
+  if (network === "mainnet") return "Sui";
+  if (network === "testnet") return "Sui Testnet";
+  if (network === "devnet") return "Sui Devnet";
+  return network;
+}
+
 export default function Page() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8788";
   const explorerTx = (process.env.NEXT_PUBLIC_SUI_EXPLORER_TX || "https://suiexplorer.com/txblock/").trim();
   const explorerObject = (process.env.NEXT_PUBLIC_SUI_EXPLORER_OBJECT || "https://suiexplorer.com/object/").trim();
+  const network = (process.env.NEXT_PUBLIC_SUI_NETWORK || "testnet").toLowerCase().trim();
   const account = useCurrentAccount();
 
   const [issues, setIssues] = React.useState<SuiIssueRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [fundCtaOpen, setFundCtaOpen] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false);
+  const [theme, setTheme] = React.useState<"light" | "dark">("light");
 
   const fetchIssues = React.useCallback(async () => {
     setLoading(true);
@@ -102,140 +125,213 @@ export default function Page() {
     fetchIssues().catch(() => {});
   }, [fetchIssues]);
 
+  React.useEffect(() => {
+    setMounted(true);
+    setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+  }, []);
+
+  const toggleTheme = React.useCallback(() => {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.classList.toggle("dark", next === "dark");
+    try {
+      localStorage.setItem("ghb-theme", next);
+    } catch {}
+    setTheme(next);
+  }, [theme]);
+
+  const handleAddIssue = React.useCallback(() => {
+    // Sui web is currently read-only. This keeps UI parity with EVM web without
+    // pretending the write flows are available yet.
+    setFundCtaOpen(true);
+  }, []);
+
   return (
-    <main className="space-y-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Sui bounties</h1>
-          <p className="text-sm text-slate-600">
-            Read-only viewer for the Sui indexer. Deploy this at <code className="rounded bg-slate-100 px-1">sui.clankergigs.com</code>.
-          </p>
-          <div className="text-xs text-slate-600">
-            wallet:{" "}
-            {account ? (
-              <span className="font-mono">{shortHex(account.address)}</span>
-            ) : (
-              <span className="italic">not connected</span>
-            )}
+    <main className="min-h-screen">
+      <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6">
+        <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold tracking-tight">ClankerGigs</h1>
+            <p className="text-sm text-muted-foreground">
+              Fund any Github issue. Claim rewards for solving it. Built for Humans and AI Agents like OpenClaw (start at{" "}
+              <a
+                href="https://github.com/seichris/gh-bounties/blob/main/AGENTS.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-foreground"
+              >
+                AGENTS.md
+              </a>
+              ).
+            </p>
           </div>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-          <ConnectButton />
-          <button
-            type="button"
-            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
-            onClick={() => fetchIssues()}
-            disabled={loading}
-          >
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </button>
-        </div>
-      </header>
+          <div className="flex items-center gap-3">
+            <Badge variant="outline" title="Configured by NEXT_PUBLIC_SUI_NETWORK">
+              {badgeLabel(network)}
+            </Badge>
+            <Button size="sm" onClick={handleAddIssue} disabled={!account}>
+              Add issue / fund bounty
+            </Button>
+            <ConnectButton
+              className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-input bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              connectText={account ? shortHex(account.address) : "Connect wallet"}
+            />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="rounded-full">
+                  <Avatar>
+                    <AvatarFallback>GH</AvatarFallback>
+                  </Avatar>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem disabled>GitHub auth not wired for Sui yet</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <a href="https://github.com/seichris/gh-bounties" target="_blank" rel="noopener noreferrer">
+                    View repo
+                  </a>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="hover:bg-transparent active:bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+              onClick={toggleTheme}
+              aria-label="Toggle dark mode"
+              disabled={!mounted}
+            >
+              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Button>
+          </div>
+        </header>
 
-      {error ? (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
-      ) : null}
+        {error ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        ) : null}
 
-      {loading ? (
-        <div className="rounded-md border border-slate-200 bg-white px-3 py-6 text-sm text-slate-600">Loading…</div>
-      ) : issues.length === 0 ? (
-        <div className="rounded-md border border-slate-200 bg-white px-3 py-6 text-sm text-slate-600">No bounties indexed yet.</div>
-      ) : (
-        <div className="space-y-3">
-          {issues.map((issue) => (
-            <div key={issue.bountyObjectId} className="rounded-md border border-slate-200 bg-white p-4">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
-                <div className="space-y-1">
+        {fundCtaOpen ? (
+          <div className="rounded-md border bg-card px-4 py-3 text-sm text-muted-foreground">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <p>
+                The Sui web UI is currently read-only (viewer). The button is here for parity with mainnet/sepolia; write
+                flows (create/fund/claim/payout) are still TODO.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button asChild variant="outline" size="sm">
                   <a
-                    href={issue.issueUrl}
+                    href="https://github.com/seichris/gh-bounties/blob/main/README-SUI.md"
                     target="_blank"
                     rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-sm font-medium text-slate-900 hover:underline"
                   >
-                    {issue.repo ? issue.repo : "repo"}#{issue.issueNumber}
-                    <ExternalLink className="h-3.5 w-3.5" />
+                    Sui docs
                   </a>
-                  <div className="text-xs text-slate-600">
-                    bounty object:{" "}
-                    <a
-                      href={`${explorerObject.replace(/\/+$/, "")}/${issue.bountyObjectId}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-mono hover:underline"
-                    >
-                      {shortHex(issue.bountyObjectId)}
-                    </a>
-                    {" · "}
-                    admin: <span className="font-mono">{shortHex(issue.admin)}</span>
-                  </div>
-                </div>
-                <div className="text-xs text-slate-600">
-                  escrowed: <span className="font-mono">{toSui(issue.escrowedMist)} SUI</span>
-                </div>
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setFundCtaOpen(false)}>
+                  Dismiss
+                </Button>
               </div>
-
-              <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-3">
-                <div>
-                  funded: <span className="font-mono">{toSui(issue.fundedMist)} SUI</span>
-                </div>
-                <div>
-                  paid: <span className="font-mono">{toSui(issue.paidMist)} SUI</span>
-                </div>
-                <div>
-                  status: <span className="font-mono">{issue.status}</span>
-                </div>
-              </div>
-
-              {issue.claims && issue.claims.length > 0 ? (
-                <div className="mt-3 text-xs text-slate-700">
-                  claims:{" "}
-                  {issue.claims.slice(0, 3).map((c, idx) => (
-                    <span key={`${c.claimer}-${idx}`}>
-                      {idx ? ", " : ""}
-                      <span className="font-mono">{shortHex(c.claimer)}</span>
-                      {c.claimUrl ? (
-                        <>
-                          {" ("}
-                          <a href={c.claimUrl} target="_blank" rel="noreferrer" className="hover:underline">
-                            link
-                          </a>
-                          {")"}
-                        </>
-                      ) : null}
-                    </span>
-                  ))}
-                  {issue.claims.length > 3 ? ` (+${issue.claims.length - 3} more)` : ""}
-                </div>
-              ) : null}
-
-              {issue.fundings && issue.fundings.length > 0 ? (
-                <div className="mt-2 text-xs text-slate-700">
-                  funders:{" "}
-                  {Array.from(new Set(issue.fundings.map((f) => f.funder.toLowerCase())))
-                    .slice(0, 4)
-                    .map((f, idx) => (
-                      <span key={f}>
-                        {idx ? ", " : ""}
-                        <span className="font-mono">{shortHex(f)}</span>
-                      </span>
-                    ))}
-                  {issue.fundings.length > 4 ? "…" : ""}
-                </div>
-              ) : null}
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        ) : null}
 
-      <footer className="text-xs text-slate-500">
-        API: <code className="rounded bg-slate-100 px-1">{apiUrl}</code>
-        {" · "}
-        Explorer:{" "}
-        <a href={explorerTx} target="_blank" rel="noreferrer" className="hover:underline">
-          tx
-        </a>
-      </footer>
+        <div className="rounded-md border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Issue</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>In active bounty</TableHead>
+                <TableHead>Admin</TableHead>
+                <TableHead className="w-10" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="px-4 py-6 text-sm text-muted-foreground">
+                    Loading…
+                  </TableCell>
+                </TableRow>
+              ) : issues.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5} className="px-4 py-6 text-sm text-muted-foreground">
+                    No bounties indexed yet.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                issues.map((issue) => (
+                  <TableRow key={issue.bountyObjectId}>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <a
+                          href={issue.issueUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 font-medium hover:underline"
+                        >
+                          {issue.repo ? issue.repo : "repo"}#{issue.issueNumber}
+                          <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+                        </a>
+                        <a
+                          href={`${explorerObject.replace(/\/+$/, "")}/${issue.bountyObjectId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-xs text-muted-foreground hover:underline"
+                        >
+                          {shortHex(issue.bountyObjectId)}
+                        </a>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{issue.status}</Badge>
+                    </TableCell>
+                    <TableCell className="font-mono">{toSui(issue.escrowedMist)} SUI</TableCell>
+                    <TableCell className="font-mono">{shortHex(issue.admin)}</TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem asChild>
+                            <a
+                              href={`${explorerObject.replace(/\/+$/, "")}/${issue.bountyObjectId}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              View bounty object
+                            </a>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem asChild>
+                            <a href={issue.issueUrl} target="_blank" rel="noreferrer">
+                              View GitHub issue
+                            </a>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <footer className="text-xs text-muted-foreground">
+          API: <code className="rounded bg-accent px-1">{apiUrl}</code>
+          {" · "}
+          Explorer:{" "}
+          <a href={explorerTx} target="_blank" rel="noreferrer" className="hover:underline">
+            tx
+          </a>
+        </footer>
+      </div>
     </main>
   );
 }

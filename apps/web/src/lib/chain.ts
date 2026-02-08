@@ -1,9 +1,37 @@
 import { defineChain } from "viem";
 
+function sanitizeRpcUrl(input: string) {
+  let url = input.trim();
+  if (!url) return "";
+
+  // Common misconfig: env values pasted with quotes, e.g. `"https://..."`.
+  url = url.replace(/^['"`]+/, "").replace(/['"`]+$/, "").trim();
+
+  // Common typo: `https:/host` (missing one slash).
+  url = url.replace(/^(https?):\/(?!\/)/i, "$1://");
+
+  return url;
+}
+
 function parseRpcUrls(value: string | undefined) {
-  return (value || "")
+  const raw = (value || "").trim();
+  if (!raw) return [];
+
+  // Allow JSON array syntax in envs, e.g. `["https://a","https://b"]`.
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((v) => sanitizeRpcUrl(String(v))).filter(Boolean);
+      }
+    } catch {
+      // fall through to comma-separated parsing
+    }
+  }
+
+  return raw
     .split(",")
-    .map((url) => url.trim())
+    .map((url) => sanitizeRpcUrl(url))
     .filter(Boolean);
 }
 

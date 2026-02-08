@@ -1,0 +1,198 @@
+# Global USDC Treasury + Payouts (Arc + Circle) — Spec
+
+## Summary
+
+Extend `gh-bounties` with a **chain-abstracted USDC treasury** that supports:
+
+1. **Multi-chain USDC funding**: fund any GitHub issue bounty with USDC from multiple supported chains using **Circle Gateway**.
+2. **Treasury on Arc**: consolidated treasury balance held on **Arc** (testnet/mainnet depending on config).
+3. **Automated/agent-driven payouts**: after a maintainer/admin approves a payout, a backend **orchestrator** executes cross-chain USDC payouts (using **Bridge Kit**) and records receipts.
+
+Non-goals:
+- Token swaps / “pay with any token” (explicitly out of scope).
+- Replacing existing on-chain bounty contract flows; this feature is an additional payout rail.
+
+---
+
+## User stories
+
+### Funder (any wallet)
+- As a funder, I can choose **USDC (Global)** and fund an issue from a supported chain.
+- I only need gas on the **source chain**; the app handles delivery to the Arc treasury.
+
+### Contributor (claimer)
+- As a contributor, I can claim a bounty as usual and specify a destination chain/address for a treasury payout.
+
+### Repo admin / maintainer
+- As a repo admin, I can approve a treasury payout for a claim.
+- The system executes the payout automatically and shows a timeline + receipts.
+
+---
+
+## Architecture (high level)
+
+```mermaid
+flowchart LR
+  U[User wallet] -->|approve + GatewayWallet.deposit()| GW[Circle Gateway Wallet Contract\n(source chain)]
+  U -->|sign BurnIntent (EIP-712)| WEB[Web app]
+  WEB -->|POST burnIntent+sig| API[gh-bounties API]
+  API -->|POST /v1/transfer| GWAPI[Circle Gateway API]
+  GWAPI -->|attestation + signature| API
+  API -->|gatewayMint(attestation, signature)| ARC[Arc Gateway Minter\n(dest chain)]
+  ARC -->|mints USDC| T[Arc Treasury Wallet]
+
+  Admin[Repo admin] -->|approve payout| WEB
+  WEB -->|POST payout request| API
+  API -->|Bridge Kit| BK[Bridge Kit]
+  BK -->|cross-chain USDC transfer| DEST[Destination chain]
+  DEST -->|USDC| R[Recipient address]
+```
+
+Key idea: the **user never needs to send the mint transaction** on Arc; they only deposit + sign a burn intent on their source chain.
+
+---
+
+## Core concepts & state machines
+
+### Funding intent (USDC Global)
+Represents “user is funding bounty X with Y USDC from chain Z”.
+
+States:
+- `created`: intent created in API
+- `deposited`: user has deposited USDC into the Gateway wallet contract
+- `transfer_submitted`: API submitted burn intent to Circle Gateway API and received attestation
+- `minted`: API minted USDC on Arc (funds arrived in treasury)
+- `credited`: internal bounty ledger updated
+- `failed`: terminal failure (retry requires new intent)
+
+### Payout intent (Treasury payout)
+Represents “pay recipient A amount Y USDC on chain C from Arc treasury”.
+
+States:
+- `created`
+- `approved` (by GitHub repo admin)
+- `executing`
+- `confirmed`
+- `failed` (retryable depending on error)
+
+---
+
+## Data model (Prisma)
+
+New tables (names subject to implementation constraints):
+
+- `TreasuryConfig`
+  - Stores public treasury settings (Arc chain identifier, treasury address, etc.)
+
+- `TreasuryFundingIntent`
+  - `bountyId`, `sourceChainId`, `sourceDomain`, `amountUsdc` (6 decimals, string), `sender`
+  - `burnIntentJson`, `burnIntentSignature`
+  - `gatewayAttestation`, `gatewayAttestationSignature`
+  - `arcMintTxHash`
+  - `status`, `error`
+
+- `TreasuryBountyLedger`
+  - `bountyId`
+  - `totalFundedUsdc`, `totalPaidUsdc`, `availableUsdc`
+
+- `TreasuryPayoutIntent`
+  - `bountyId`, optional `claimId`
+  - `destinationChain` (Bridge Kit identifier), `recipient`, `amountUsdc`
+  - `status`, `error`
+  - receipts: `bridgeTxHash` / `finalTxHash` (as available)
+
+---
+
+## Backend API surface
+
+### Public config
+- `GET /treasury/config`
+  - returns supported source chains/domains, treasury destination (Arc), treasury address, and UI defaults.
+
+### Funding (Global USDC via Gateway)
+- `POST /treasury/funding-intents`
+  - body: `{ bountyId, amountUsdc, sourceChainId, sender }`
+  - response: `{ intentId, gateway: { walletContract, usdcAddress, sourceDomain, destinationDomain }, treasury: { arcAddress, destinationCaller } }`
+
+- `POST /treasury/funding-intents/:id/submit-burn-intent`
+  - body: `{ burnIntent, signature }` (signed by `sender`)
+  - server validates:
+    - destinationRecipient == configured treasury address
+    - destinationCaller == configured destination caller address (API-controlled)
+    - value == expected amount
+  - server calls Circle Gateway `/v1/transfer`, stores attestation.
+
+- `POST /treasury/funding-intents/:id/mint`
+  - server sends `gatewayMint(attestation, signature)` on Arc and credits ledger.
+  - In “agent mode”, this is auto-run by the orchestrator; endpoint exists for manual retry.
+
+### Payouts (Arc treasury → global)
+- `POST /treasury/payout-intents`
+  - auth: GitHub repo admin (same checks as existing `/payout-auth`)
+  - body: `{ bountyId, recipient, destinationChain, amountUsdc }`
+  - creates a payout intent and schedules execution.
+
+- `GET /treasury/payout-intents?bountyId=...`
+  - returns payout timeline and receipts for UI.
+
+---
+
+## Orchestrator (agent-driven)
+
+Runs inside `apps/api` as a background loop:
+- picks up pending funding intents and completes `transfer_submitted → minted → credited`
+- picks up pending payout intents and executes them using Bridge Kit
+- enforces idempotency and safe retries
+
+Configuration knobs:
+- `TREASURY_ORCHESTRATOR_ENABLED=1`
+- `TREASURY_ORCHESTRATOR_INTERVAL_MS=...`
+- retry limits for known transient errors
+
+---
+
+## Frontend changes
+
+### Funding UI
+Update the existing “Fund Issue” flow to add:
+- Funding asset: `USDC (Global via Gateway)`
+- Source chain selector (supported domains)
+- Two-step action:
+  1) Deposit USDC into Gateway wallet contract (source chain)
+  2) Sign burn intent (EIP-712) and submit to API (API mints on Arc)
+
+### Treasury UI (minimal)
+Per-issue:
+- Show “Treasury USDC” balance (available + funded + paid)
+- Show recent funding intents + status
+
+### Admin payout UI (minimal)
+Per-issue:
+- Create payout intent (recipient, chain, amount)
+- Show status and receipts
+
+---
+
+## Configuration (env vars)
+
+Backend (`apps/api`):
+- `TREASURY_ENABLED=1`
+- `TREASURY_ARC_CHAIN_ID` and `TREASURY_ARC_RPC_URL` (or a Bridge Kit chain identifier)
+- `TREASURY_ADDRESS` (recipient of minted USDC on Arc)
+- `TREASURY_DESTINATION_CALLER` (address that will call `gatewayMint` on Arc)
+- `TREASURY_DESTINATION_CALLER_PRIVATE_KEY` (initial MVP; replace with Circle Wallets signing in later iterations)
+- `CIRCLE_GATEWAY_API_URL` (default depends on mainnet/testnet)
+ - (optional) `CIRCLE_API_KEY` + `CIRCLE_ENTITY_SECRET` to run Bridge Kit payouts using Circle Wallets adapter
+
+Frontend (`apps/web`):
+- `NEXT_PUBLIC_TREASURY_ENABLED=1`
+- `NEXT_PUBLIC_API_URL` (already used)
+
+---
+
+## Demo checklist (hackathon)
+
+- Funding: show a user funding an issue with USDC from a non-Arc chain via Gateway.
+- Treasury: show the Arc treasury balance increasing and the ledger crediting the bounty.
+- Payout: approve a payout and show Bridge Kit delivering USDC to a recipient chain.
+- Include architecture diagram and short video walkthrough.

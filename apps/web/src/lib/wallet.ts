@@ -14,7 +14,40 @@ export function getConfig() {
     throw new Error("Missing RPC URL (set NEXT_PUBLIC_RPC_URL, or NEXT_PUBLIC_RPC_URLS_ETHEREUM_SEPOLIA/MAINNET)");
   }
 
+  if (!/^https?:\/\//i.test(rpcUrl)) {
+    throw new Error(
+      "Invalid RPC URL (must start with http:// or https://). Check for accidental quotes in env vars like NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET."
+    );
+  }
+
   return { chain, contractAddress, rpcUrl };
+}
+
+function parseChainIdHex(chainIdHex: unknown): number | null {
+  if (typeof chainIdHex !== "string") return null;
+  if (!chainIdHex.startsWith("0x")) return null;
+  const n = Number.parseInt(chainIdHex, 16);
+  return Number.isFinite(n) ? n : null;
+}
+
+export async function ensureWalletChain(targetChainId: number) {
+  const eth = (globalThis as any).ethereum;
+  if (!eth?.request) throw new Error("No injected wallet found (window.ethereum)");
+  const currentHex = await eth.request({ method: "eth_chainId" }).catch(() => null);
+  const current = parseChainIdHex(currentHex);
+  if (current === targetChainId) return;
+
+  const targetHex = `0x${targetChainId.toString(16)}`;
+  try {
+    await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
+  } catch (err: any) {
+    // Common MetaMask error code when the chain isn't added yet.
+    const code = err?.code;
+    if (code === 4902) {
+      throw new Error(`Wallet does not have chain ${targetChainId} configured. Add it in your wallet, then retry.`);
+    }
+    throw err;
+  }
 }
 
 export function getPublicClient() {
