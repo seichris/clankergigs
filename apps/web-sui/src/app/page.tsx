@@ -270,8 +270,14 @@ export default function Page() {
     if (!bountyId) return null;
 
     try {
-      const amountMist = BigInt((fields as Record<string, unknown>).amount_mist ?? "0");
-      const lockedUntilMs = BigInt((fields as Record<string, unknown>).locked_until_ms ?? "0");
+      const amountRaw = (fields as Record<string, unknown>).amount_mist;
+      const lockedRaw = (fields as Record<string, unknown>).locked_until_ms;
+      const amountMist = BigInt(
+        typeof amountRaw === "string" || typeof amountRaw === "number" || typeof amountRaw === "bigint" ? amountRaw : "0"
+      );
+      const lockedUntilMs = BigInt(
+        typeof lockedRaw === "string" || typeof lockedRaw === "number" || typeof lockedRaw === "bigint" ? lockedRaw : "0"
+      );
       return {
         receiptObjectId: objectId,
         bountyObjectId: bountyId,
