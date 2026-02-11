@@ -33,6 +33,9 @@ async function ensureRepoAdmin(opts: { githubToken: string; owner: string; repo:
   }
   if (!ghRes.ok) {
     const text = await ghRes.text().catch(() => "");
+    if (ghRes.status === 401) {
+      throw new Error("GitHub session expired or invalid. Please reconnect GitHub.");
+    }
     throw new Error(`GitHub API error (${ghRes.status}): ${text || ghRes.statusText}`);
   }
   const ghData = (await ghRes.json()) as any;

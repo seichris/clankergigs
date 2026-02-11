@@ -148,6 +148,9 @@ async function main() {
     }
     if (!ghRes.ok) {
       const text = await ghRes.text().catch(() => "");
+      if (ghRes.status === 401) {
+        return reply.code(401).send({ error: "GitHub session expired or invalid. Please reconnect GitHub.", isAdmin: false });
+      }
       return reply.code(403).send({ error: `GitHub API error (${ghRes.status}): ${text || ghRes.statusText}`, isAdmin: false });
     }
     const ghData = (await ghRes.json()) as any;

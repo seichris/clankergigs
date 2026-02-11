@@ -40,6 +40,32 @@ function writeCache(key: string, value: GithubIssueSummary | null, ttlMs: number
   cache.set(key, { value, expiresAt: nowMs() + ttlMs });
 }
 
+async function githubGet(url: string, token?: string | null) {
+  const baseHeaders = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "gh-bounties"
+  } as Record<string, string>;
+
+  const authVariants = token
+    ? [`Bearer ${token}`, `token ${token}`, null]
+    : [null];
+
+  for (let i = 0; i < authVariants.length; i += 1) {
+    const authHeader = authVariants[i];
+    const res = await fetch(url, {
+      headers: authHeader ? { ...baseHeaders, Authorization: authHeader } : baseHeaders
+    });
+
+    // Retry with a different auth strategy when credentials appear invalid.
+    if (res.status === 401 && i < authVariants.length - 1) {
+      continue;
+    }
+    return res;
+  }
+
+  return fetch(url, { headers: baseHeaders });
+}
+
 export async function fetchGithubIssueByUrl(opts: {
   issueUrl: string;
   token?: string | null;
@@ -58,17 +84,7 @@ export async function fetchGithubIssueByUrl(opts: {
   const issueApiUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}/issues/${parsed.issueNumber}`;
   const repoApiUrl = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`;
   try {
-    const headers = {
-      Accept: "application/vnd.github+json",
-      ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
-      "User-Agent": "gh-bounties"
-    };
-
-    const res = await fetch(issueApiUrl, {
-      headers: {
-        ...headers
-      }
-    });
+    const res = await githubGet(issueApiUrl, opts.token);
 
     if (res.status === 404) {
       writeCache(opts.issueUrl, null, ERROR_TTL_MS);
@@ -83,7 +99,7 @@ export async function fetchGithubIssueByUrl(opts: {
     const payload = (await res.json()) as any;
     let repoSummary: GithubIssueSummary["repo"] = null;
     try {
-      const repoRes = await fetch(repoApiUrl, { headers: { ...headers } });
+      const repoRes = await githubGet(repoApiUrl, opts.token);
       if (repoRes.ok) {
         const repoPayload = (await repoRes.json()) as any;
         repoSummary = {

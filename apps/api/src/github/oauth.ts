@@ -38,6 +38,33 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return out;
 }
 
+async function fetchGithubUserWithToken(accessToken: string): Promise<{ user: GithubUser | null; status: number; errorText: string }> {
+  const baseHeaders = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "gh-bounties"
+  } as Record<string, string>;
+
+  let userRes = await fetch("https://api.github.com/user", {
+    headers: { ...baseHeaders, Authorization: `Bearer ${accessToken}` }
+  });
+  if (userRes.status === 401) {
+    userRes = await fetch("https://api.github.com/user", {
+      headers: { ...baseHeaders, Authorization: `token ${accessToken}` }
+    });
+  }
+  if (!userRes.ok) {
+    const text = await userRes.text().catch(() => "");
+    return { user: null, status: userRes.status, errorText: text || userRes.statusText };
+  }
+
+  const user = (await userRes.json().catch(() => null)) as GithubUser | null;
+  if (!user?.login) {
+    return { user: null, status: 502, errorText: "Invalid GitHub /user payload" };
+  }
+
+  return { user, status: 200, errorText: "" };
+}
+
 function setCookie(reply: FastifyReply, value: string) {
   // Host-only cookie (no Domain) so it works cleanly for localhost dev.
   const maxAge = Math.floor(SESSION_TTL_MS / 1000);
@@ -155,19 +182,11 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
     const accessToken = (tokenJson?.access_token as string) || "";
     if (!accessToken) return reply.code(502).send({ error: "GitHub token exchange returned no access_token" });
 
-    const userRes = await fetch("https://api.github.com/user", {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${accessToken}`,
-        "User-Agent": "gh-bounties"
-      }
-    });
-    if (!userRes.ok) {
-      const text = await userRes.text().catch(() => "");
-      return reply.code(502).send({ error: `GitHub /user failed (${userRes.status}): ${text || userRes.statusText}` });
+    const userCheck = await fetchGithubUserWithToken(accessToken);
+    if (!userCheck.user) {
+      return reply.code(502).send({ error: `GitHub /user failed (${userCheck.status}): ${userCheck.errorText}` });
     }
-    const user = (await userRes.json()) as GithubUser;
-    if (!user?.login) return reply.code(502).send({ error: "GitHub /user returned invalid payload" });
+    const user = userCheck.user;
 
     const sid = randomHex(24);
     const expiresAt = new Date(nowMs() + SESSION_TTL_MS);
@@ -186,8 +205,43 @@ export function registerGithubOAuthRoutes(app: FastifyInstance) {
   });
 
   app.get("/auth/me", async (req, reply) => {
+    const cookies = parseCookies(req.headers.cookie);
+    const sid = cookies[COOKIE_NAME];
+    if (!sid) return reply.code(401).send({ error: "Not logged in" });
+
+    const token = await getGithubAccessTokenFromRequest(req);
     const user = await getGithubUserFromRequest(req);
-    if (!user) return reply.code(401).send({ error: "Not logged in" });
+    if (!token || !user) {
+      clearCookie(reply);
+      return reply.code(401).send({ error: "Not logged in" });
+    }
+
+    const userCheck = await fetchGithubUserWithToken(token);
+    if (!userCheck.user && userCheck.status === 401) {
+      await prisma.githubSession.delete({ where: { id: sid } }).catch(() => {});
+      clearCookie(reply);
+      return reply.code(401).send({ error: "GitHub session expired. Please reconnect GitHub." });
+    }
+    if (userCheck.user) {
+      if (
+        userCheck.user.login !== user.login ||
+        userCheck.user.id !== user.id ||
+        (userCheck.user.avatar_url ?? null) !== (user.avatar_url ?? null)
+      ) {
+        await prisma.githubSession
+          .update({
+            where: { id: sid },
+            data: {
+              userLogin: userCheck.user.login,
+              userId: userCheck.user.id,
+              userAvatarUrl: userCheck.user.avatar_url ?? null
+            }
+          })
+          .catch(() => {});
+      }
+      return reply.send({ user: userCheck.user });
+    }
+
     return reply.send({ user });
   });
 
