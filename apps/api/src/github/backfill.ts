@@ -1,6 +1,8 @@
 import type { PrismaClient } from "../../src/generated/prisma/index.js";
 import { getGithubToken, type GithubAuthConfig } from "./appAuth.js";
+import { postPullRequestCommentIfMissing } from "./comments.js";
 import { parseGithubIssueUrl } from "./parse.js";
+import { buildPrClaimReminderComment, PR_CLAIM_REMINDER_MARKER } from "./prReminder.js";
 
 type BackfillOptions = {
   prisma: PrismaClient;
@@ -164,6 +166,23 @@ export async function backfillLinkedPullRequests(opts: BackfillOptions) {
         create: { bountyId: bounty.bountyId, prUrl, author, createdAt },
         update: { author }
       });
+
+      // Backfill should also add the same reminder comment used by live webhook flow.
+      try {
+        const commentBody = buildPrClaimReminderComment({
+          author,
+          issueUrls: [bounty.metadataURI]
+        });
+        await postPullRequestCommentIfMissing({
+          github: opts.github,
+          prUrl,
+          body: commentBody,
+          marker: PR_CLAIM_REMINDER_MARKER
+        });
+      } catch (err: any) {
+        log?.warn({ err: err?.message ?? String(err), prUrl, issueUrl: bounty.metadataURI }, "PR backfill comment failed");
+      }
+
       if (already) issueUpdated += 1;
       else issueCreated += 1;
     }

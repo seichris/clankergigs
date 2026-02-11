@@ -3,7 +3,7 @@ import { ghBountiesAbi } from "./abi.js";
 import { createPublicClient, fallback, http, isAddress, formatUnits, type Hex } from "viem";
 import { mainnet, sepolia } from "viem/chains";
 import { syncBountyLabels } from "../github/labels.js";
-import { postIssueComment } from "../github/comments.js";
+import { postIssueCommentIfMissing } from "../github/comments.js";
 import type { GithubAuthConfig } from "../github/appAuth.js";
 
 type IndexerConfig = {
@@ -12,7 +12,6 @@ type IndexerConfig = {
   contractAddress: Hex;
   github?: GithubAuthConfig | null;
   backfillBlockChunk?: number;
-  labelOnBackfill?: boolean;
 };
 
 type PublicClient = ReturnType<typeof createPublicClient>;
@@ -95,6 +94,10 @@ async function bumpAssetTotals(prisma: any, bountyId: Hex, token: string, delta:
     create: { bountyId, token, funded: funded.toString(), escrowed: escrowed.toString(), paid: paid.toString() },
     update: { funded: funded.toString(), escrowed: escrowed.toString(), paid: paid.toString() }
   });
+}
+
+function eventMarker(cfg: IndexerConfig, eventName: string, txHash: string, logIndex: number) {
+  return `ghb:${cfg.chainId}:${cfg.contractAddress.toLowerCase()}:${eventName}:${txHash.toLowerCase()}:${logIndex}`;
 }
 
 export async function startIndexer(cfg: IndexerConfig) {
@@ -243,13 +246,11 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         }
       });
 
-      if (!opts?.isBackfill || cfg.labelOnBackfill) {
-        // Best-effort label sync if metadataURI is a GitHub issue URL.
-        try {
-          await syncBountyLabels({ github: cfg.github ?? null, issueUrl: metadataURI, status: "OPEN" });
-        } catch {
-          // Don't break indexing on GitHub failures.
-        }
+      // Best-effort label sync if metadataURI is a GitHub issue URL.
+      try {
+        await syncBountyLabels({ github: cfg.github ?? null, issueUrl: metadataURI, status: "OPEN" });
+      } catch {
+        // Don't break indexing on GitHub failures.
       }
       break;
     }
@@ -259,6 +260,9 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const funder = (log.args.funder as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
       const lockedUntil = Number(log.args.lockedUntil as bigint);
+      const existingFunding = await prisma.funding.findUnique({
+        where: { txHash_logIndex: { txHash, logIndex } }
+      });
 
       await prisma.funding.upsert({
         where: { txHash_logIndex: { txHash, logIndex } },
@@ -266,37 +270,42 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         update: { bountyId, token, funder, amountWei, lockedUntil, blockNumber }
       });
 
-      await bumpAssetTotals(prisma, bountyId, token, { funded: BigInt(amountWei), escrowed: BigInt(amountWei) });
+      if (!existingFunding) {
+        await bumpAssetTotals(prisma, bountyId, token, { funded: BigInt(amountWei), escrowed: BigInt(amountWei) });
+      }
 
-      if (!opts?.isBackfill) {
-        try {
-          const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
-          const issueUrl = bounty?.metadataURI;
-          if (issueUrl) {
-            const meta = await getTokenMeta(client, token);
-            const amountDisplay = formatUnits(BigInt(amountWei), meta.decimals);
-            const tokenLabel =
-              meta.symbol && meta.symbol.length > 0
-                ? meta.symbol
-                : token === NATIVE_TOKEN
-                  ? "ETH"
-                  : `${token.slice(0, 6)}…${token.slice(-4)}`;
-            const lines = [
-              `💸 Bounty funded: ${amountDisplay} ${tokenLabel}`,
-              `Funder: ${funder}`
-            ];
-            if (token !== NATIVE_TOKEN && (!meta.symbol || meta.symbol.length === 0)) {
-              lines.push(`Token: ${token}`);
-            }
-            if (lockedUntil > 0) {
-              const lockDate = new Date(lockedUntil * 1000).toISOString().replace("T", " ").replace("Z", " UTC");
-              lines.push(`Lock until: ${lockDate}`);
-            }
-            await postIssueComment({ github: cfg.github ?? null, issueUrl, body: lines.join("\n") });
+      try {
+        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const issueUrl = bounty?.metadataURI;
+        if (issueUrl) {
+          const meta = await getTokenMeta(client, token);
+          const amountDisplay = formatUnits(BigInt(amountWei), meta.decimals);
+          const tokenLabel =
+            meta.symbol && meta.symbol.length > 0
+              ? meta.symbol
+              : token === NATIVE_TOKEN
+                ? "ETH"
+                : `${token.slice(0, 6)}…${token.slice(-4)}`;
+          const lines = [
+            `💸 Bounty funded: ${amountDisplay} ${tokenLabel}`,
+            `Funder: ${funder}`
+          ];
+          if (token !== NATIVE_TOKEN && (!meta.symbol || meta.symbol.length === 0)) {
+            lines.push(`Token: ${token}`);
           }
-        } catch {
-          // Best-effort: don't block indexing if GitHub comment fails.
+          if (lockedUntil > 0) {
+            const lockDate = new Date(lockedUntil * 1000).toISOString().replace("T", " ").replace("Z", " UTC");
+            lines.push(`Lock until: ${lockDate}`);
+          }
+          await postIssueCommentIfMissing({
+            github: cfg.github ?? null,
+            issueUrl,
+            body: lines.join("\n"),
+            marker: eventMarker(cfg, "BountyFunded", txHash, logIndex)
+          });
         }
+      } catch {
+        // Best-effort: don't block indexing if GitHub comment fails.
       }
       break;
     }
@@ -312,21 +321,24 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         update: { bountyId, claimId, claimer, metadataURI, blockNumber }
       });
 
-      if (!opts?.isBackfill) {
-        try {
-          const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
-          const issueUrl = bounty?.metadataURI;
-          if (issueUrl) {
-            const lines = [
-              `🧾 Claim submitted (#${claimId})`,
-              `Claimer: ${claimer}`,
-              metadataURI ? `Claim URL: ${metadataURI}` : null
-            ].filter(Boolean) as string[];
-            await postIssueComment({ github: cfg.github ?? null, issueUrl, body: lines.join("\n") });
-          }
-        } catch {
-          // Best-effort: don't block indexing if GitHub comment fails.
+      try {
+        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const issueUrl = bounty?.metadataURI;
+        if (issueUrl) {
+          const lines = [
+            `🧾 Claim submitted (#${claimId})`,
+            `Claimer: ${claimer}`,
+            metadataURI ? `Claim URL: ${metadataURI}` : null
+          ].filter(Boolean) as string[];
+          await postIssueCommentIfMissing({
+            github: cfg.github ?? null,
+            issueUrl,
+            body: lines.join("\n"),
+            marker: eventMarker(cfg, "ClaimSubmitted", txHash, logIndex)
+          });
         }
+      } catch {
+        // Best-effort: don't block indexing if GitHub comment fails.
       }
       break;
     }
@@ -335,13 +347,11 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const status = statusFromEnum(Number(log.args.status as bigint));
       await prisma.bounty.update({ where: { bountyId }, data: { status } });
 
-      if (!opts?.isBackfill) {
-        try {
-          const b = await prisma.bounty.findUnique({ where: { bountyId } });
-          if (b?.metadataURI) await syncBountyLabels({ github: cfg.github ?? null, issueUrl: b.metadataURI, status });
-        } catch {
-          // best-effort
-        }
+      try {
+        const b = await prisma.bounty.findUnique({ where: { bountyId } });
+        if (b?.metadataURI) await syncBountyLabels({ github: cfg.github ?? null, issueUrl: b.metadataURI, status });
+      } catch {
+        // best-effort
       }
       break;
     }
@@ -350,6 +360,9 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const token = (log.args.token as string).toLowerCase();
       const recipient = (log.args.recipient as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
+      const existingPayout = await prisma.payout.findUnique({
+        where: { txHash_logIndex: { txHash, logIndex } }
+      });
 
       await prisma.payout.upsert({
         where: { txHash_logIndex: { txHash, logIndex } },
@@ -357,33 +370,38 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         update: { bountyId, token, recipient, amountWei, blockNumber }
       });
 
-      await bumpAssetTotals(prisma, bountyId, token, { paid: BigInt(amountWei), escrowed: -BigInt(amountWei) });
+      if (!existingPayout) {
+        await bumpAssetTotals(prisma, bountyId, token, { paid: BigInt(amountWei), escrowed: -BigInt(amountWei) });
+      }
 
-      if (!opts?.isBackfill) {
-        try {
-          const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
-          const issueUrl = bounty?.metadataURI;
-          if (issueUrl) {
-            const meta = await getTokenMeta(client, token);
-            const amountDisplay = formatUnits(BigInt(amountWei), meta.decimals);
-            const tokenLabel =
-              meta.symbol && meta.symbol.length > 0
-                ? meta.symbol
-                : token === NATIVE_TOKEN
-                  ? "ETH"
-                  : `${token.slice(0, 6)}…${token.slice(-4)}`;
-            const lines = [
-              `✅ Payout completed: ${amountDisplay} ${tokenLabel}`,
-              `Recipient: ${recipient}`
-            ];
-            if (token !== NATIVE_TOKEN && (!meta.symbol || meta.symbol.length === 0)) {
-              lines.push(`Token: ${token}`);
-            }
-            await postIssueComment({ github: cfg.github ?? null, issueUrl, body: lines.join("\n") });
+      try {
+        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const issueUrl = bounty?.metadataURI;
+        if (issueUrl) {
+          const meta = await getTokenMeta(client, token);
+          const amountDisplay = formatUnits(BigInt(amountWei), meta.decimals);
+          const tokenLabel =
+            meta.symbol && meta.symbol.length > 0
+              ? meta.symbol
+              : token === NATIVE_TOKEN
+                ? "ETH"
+                : `${token.slice(0, 6)}…${token.slice(-4)}`;
+          const lines = [
+            `✅ Payout completed: ${amountDisplay} ${tokenLabel}`,
+            `Recipient: ${recipient}`
+          ];
+          if (token !== NATIVE_TOKEN && (!meta.symbol || meta.symbol.length === 0)) {
+            lines.push(`Token: ${token}`);
           }
-        } catch {
-          // Best-effort: don't block indexing if GitHub comment fails.
+          await postIssueCommentIfMissing({
+            github: cfg.github ?? null,
+            issueUrl,
+            body: lines.join("\n"),
+            marker: eventMarker(cfg, "PaidOut", txHash, logIndex)
+          });
         }
+      } catch {
+        // Best-effort: don't block indexing if GitHub comment fails.
       }
       break;
     }
@@ -392,6 +410,9 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const token = (log.args.token as string).toLowerCase();
       const funder = (log.args.funder as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
+      const existingRefund = await prisma.refund.findUnique({
+        where: { txHash_logIndex: { txHash, logIndex } }
+      });
 
       await prisma.refund.upsert({
         where: { txHash_logIndex: { txHash, logIndex } },
@@ -399,7 +420,39 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         update: { bountyId, token, funder, amountWei, blockNumber }
       });
 
-      await bumpAssetTotals(prisma, bountyId, token, { escrowed: -BigInt(amountWei) });
+      if (!existingRefund) {
+        await bumpAssetTotals(prisma, bountyId, token, { escrowed: -BigInt(amountWei) });
+      }
+
+      try {
+        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const issueUrl = bounty?.metadataURI;
+        if (issueUrl) {
+          const meta = await getTokenMeta(client, token);
+          const amountDisplay = formatUnits(BigInt(amountWei), meta.decimals);
+          const tokenLabel =
+            meta.symbol && meta.symbol.length > 0
+              ? meta.symbol
+              : token === NATIVE_TOKEN
+                ? "ETH"
+                : `${token.slice(0, 6)}…${token.slice(-4)}`;
+          const lines = [
+            `↩️ Refund completed: ${amountDisplay} ${tokenLabel}`,
+            `Funder: ${funder}`
+          ];
+          if (token !== NATIVE_TOKEN && (!meta.symbol || meta.symbol.length === 0)) {
+            lines.push(`Token: ${token}`);
+          }
+          await postIssueCommentIfMissing({
+            github: cfg.github ?? null,
+            issueUrl,
+            body: lines.join("\n"),
+            marker: eventMarker(cfg, "Refunded", txHash, logIndex)
+          });
+        }
+      } catch {
+        // Best-effort: don't block indexing if GitHub comment fails.
+      }
       break;
     }
     default:

@@ -72,6 +72,32 @@ function escrowedForToken(issue: IssueRow, token: string) {
   }
 }
 
+function decimalsForToken(issue: IssueRow, token: string) {
+  if (token.toLowerCase() === ETH_ADDRESS.toLowerCase()) return 18;
+  const usdc = usdcAddressForChainId(issue.chainId);
+  if (usdc && token.toLowerCase() === usdc.toLowerCase()) return 6;
+  return 18;
+}
+
+function normalizeTo18Decimals(amount: bigint, decimals: number) {
+  if (decimals === 18) return amount;
+  if (decimals > 18) return amount / (10n ** BigInt(decimals - 18));
+  return amount * (10n ** BigInt(18 - decimals));
+}
+
+function totalEscrowedForSort(issue: IssueRow) {
+  let total = 0n;
+  for (const asset of issue.assets) {
+    try {
+      const raw = BigInt(asset.escrowedWei);
+      total += normalizeTo18Decimals(raw, decimalsForToken(issue, asset.token));
+    } catch {
+      // Ignore malformed amounts to keep sorting resilient.
+    }
+  }
+  return total;
+}
+
 function UnlockBar({ schedule }: { schedule: UnlockSchedule | null }) {
   const days = schedule?.days ?? [];
   const maxDay = days.length ? Math.max(1, ...days.map((d) => d.day)) : 0;
@@ -230,6 +256,8 @@ export function createIssueColumns(options: {
     },
     {
       id: "assets",
+      accessorFn: (row) => totalEscrowedForSort(row).toString(),
+      enableSorting: true,
       header: ({ column }) => (
         <Button
           variant="ghost"
@@ -244,15 +272,15 @@ export function createIssueColumns(options: {
       sortingFn: (rowA, rowB) => {
         const issueA = rowA.original as IssueRow;
         const issueB = rowB.original as IssueRow;
-        const usdcA = usdcAddressForChainId(issueA.chainId);
-        const usdcB = usdcAddressForChainId(issueB.chainId);
+        const totalA = totalEscrowedForSort(issueA);
+        const totalB = totalEscrowedForSort(issueB);
+        if (totalA !== totalB) return totalA > totalB ? 1 : -1;
+
+        // Stable tie-breakers for predictable ordering.
         const ethA = escrowedForToken(issueA, ETH_ADDRESS);
         const ethB = escrowedForToken(issueB, ETH_ADDRESS);
         if (ethA !== ethB) return ethA > ethB ? 1 : -1;
-        const usdcAmountA = usdcA ? escrowedForToken(issueA, usdcA) : 0n;
-        const usdcAmountB = usdcB ? escrowedForToken(issueB, usdcB) : 0n;
-        if (usdcAmountA === usdcAmountB) return 0;
-        return usdcAmountA > usdcAmountB ? 1 : -1;
+        return issueA.bountyId.localeCompare(issueB.bountyId);
       },
       cell: ({ row }) => {
         const issue = row.original;

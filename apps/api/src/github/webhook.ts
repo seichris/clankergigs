@@ -3,8 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { getPrisma } from "../db.js";
 import type { GithubAuthConfig } from "./appAuth.js";
 import { postPullRequestCommentIfMissing } from "./comments.js";
-
-const COMMENT_MARKER = "<!-- gh-bounties-pr-claim-reminder -->";
+import { buildPrClaimReminderComment, PR_CLAIM_REMINDER_MARKER } from "./prReminder.js";
 
 function timingSafeEqual(a: string, b: string) {
   const ab = Buffer.from(a);
@@ -129,14 +128,10 @@ export function registerGithubWebhookRoutes(
           return { ok: true };
         }
 
-        const mention = author ? `@${author}` : "there";
-        const lines = [
-          COMMENT_MARKER,
-          `Hey ${mention} — this PR references bounty issue(s):`,
-          ...bountyMatches.map((match) => `- ${match.issueUrl}`),
-          "",
-          "If you're the implementer, please claim the bounty at http://localhost:3000/ and submit this PR URL."
-        ];
+        const commentBody = buildPrClaimReminderComment({
+          author,
+          issueUrls: bountyMatches.map((match) => match.issueUrl)
+        });
 
         try {
           for (const match of bountyMatches) {
@@ -154,8 +149,8 @@ export function registerGithubWebhookRoutes(
           await postPullRequestCommentIfMissing({
             github: opts.github,
             prUrl,
-            body: lines.join("\n"),
-            marker: COMMENT_MARKER
+            body: commentBody,
+            marker: PR_CLAIM_REMINDER_MARKER
           });
         } catch (err: any) {
           req.log.warn({ err: err?.message ?? String(err) }, "failed to post PR bounty comment");

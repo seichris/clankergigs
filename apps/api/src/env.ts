@@ -56,8 +56,6 @@ const EnvSchema = z.object({
   GITHUB_TOKEN: z.string().optional().or(z.literal("")),
   GITHUB_BACKFILL_INTERVAL_MINUTES: z.coerce.number().int().min(0).default(60),
   INDEXER_BACKFILL_BLOCK_CHUNK: z.coerce.number().int().min(1).default(10),
-  // If enabled, apply bounty labels during indexer backfill (may be noisy on large backfills).
-  LABEL_ON_BACKFILL: z.coerce.number().int().min(0).max(1).default(0),
   GITHUB_AUTH_MODE: z
     .preprocess(
       (value) => (typeof value === "string" ? value.toLowerCase() : value),
