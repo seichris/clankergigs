@@ -1,6 +1,7 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
+import Link from "next/link";
 import { formatUnits } from "viem";
 import { ArrowUpDown, ExternalLink } from "lucide-react";
 
@@ -184,6 +185,9 @@ export function createIssueColumns(options: {
                 {title}
               </a>
               <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+              <Link href={`/bounty/${issue.bountyId}`} className="text-xs text-primary hover:underline">
+                Open bounty
+              </Link>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>

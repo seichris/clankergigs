@@ -90,7 +90,14 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
           ...(chainId ? { chainId } : {}),
           ...(contractAddress ? { contractAddress } : {})
         },
-        include: { assets: true, fundings: true, claims: true, payouts: true, refunds: true }
+        include: {
+          assets: true,
+          fundings: true,
+          claims: true,
+          payouts: true,
+          refunds: true,
+          linkedPullRequests: { select: { prUrl: true, author: true, createdAt: true } }
+        }
       });
       return { bounty: b };
     }

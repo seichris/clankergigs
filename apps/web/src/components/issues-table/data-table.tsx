@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   flexRender,
   getCoreRowModel,
@@ -148,7 +149,12 @@ function ExpandedIssueRow({
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-xs uppercase text-muted-foreground">Identifiers</span>
         <span className="font-mono text-xs">repoHash: {issue.repoHash}</span>
-        <span className="font-mono text-xs">bountyId: {issue.bountyId}</span>
+        <span className="font-mono text-xs">
+          bountyId:{" "}
+          <Link href={`/bounty/${issue.bountyId}`} className="text-primary hover:underline">
+            {issue.bountyId}
+          </Link>
+        </span>
       </div>
       <div className="grid gap-2 md:grid-cols-2">
         <div className="space-y-2">
