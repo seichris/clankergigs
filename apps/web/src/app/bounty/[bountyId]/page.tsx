@@ -296,7 +296,7 @@ export default function BountyPage() {
             >
               Submit claim
             </Button>
-            {isRepoOwner ? (
+            {isRepoOwner || isFunder ? (
               <Button variant="secondary" onClick={() => setPayOutOpen(true)}>
                 Pay out bounty
               </Button>

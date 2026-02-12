@@ -518,26 +518,28 @@ export default function Page() {
         <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-2">
             <h1 className="text-2xl font-semibold tracking-tight">ClankerGigs</h1>
-            <p className="text-sm text-muted-foreground">
-              Fund any Github issue. Claim rewards for solving it. Built for Humans and AI Agents like OpenClaw (start at{" "}
-              <a
-                href="https://github.com/seichris/gh-bounties/blob/main/AGENTS.md"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-foreground"
-              >
-                AGENTS.md
-              </a>
-              ).
-            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+              <Button size="sm" onClick={() => setAddOpen(true)} disabled={!account || !packageId}>
+                Add bounty
+              </Button>
+              <p className="text-sm text-muted-foreground">
+                Fund any Github issue. Claim rewards for solving it. AI Agents start at{" "}
+                <a
+                  href="https://github.com/seichris/clankergigs/blob/main/AGENTS.md"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  AGENTS.md
+                </a>
+                .
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             <Badge variant="outline" title="Configured by NEXT_PUBLIC_SUI_NETWORK">
               {badgeLabel(network)}
             </Badge>
-            <Button size="sm" onClick={() => setAddOpen(true)} disabled={!account || !packageId}>
-              Add issue / fund bounty
-            </Button>
             <ConnectButton
               className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-input bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               connectText={account ? shortHex(account.address) : "Connect wallet"}

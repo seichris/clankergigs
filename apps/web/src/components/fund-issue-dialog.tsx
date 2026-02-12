@@ -233,8 +233,9 @@ export function FundIssueDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="lock-days">Lock days</Label>
+              <Label htmlFor="lock-days">Funds locked for {lockDaysValue} days</Label>
               <Input id="lock-days" value={lockDays} onChange={(event) => setLockDays(event.target.value)} />
+              <div className="text-xs text-muted-foreground">The days you commit to locking the funds in the bounty.</div>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="amount">Amount</Label>

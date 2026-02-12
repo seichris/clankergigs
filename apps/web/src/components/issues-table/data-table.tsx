@@ -23,6 +23,7 @@ import { formatUnits, type Address } from "viem";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -66,35 +67,80 @@ function ExpandedIssueRow({
   walletAddress,
   githubUser,
   onClaim,
-  onPayOutBounty,
 }: {
   issue: IssueRow;
   showUsdc: boolean;
   walletAddress: Address | null;
   githubUser: GithubUser | null;
   onClaim: (issue: IssueRow) => void;
-  onPayOutBounty: (issue: IssueRow) => void;
 }) {
+  const activityBarRef = React.useRef<HTMLDivElement | null>(null);
+  const [activityBarWidth, setActivityBarWidth] = React.useState(0);
+
   const usdc = usdcAddressForChainId(issue.chainId);
   const assets = showUsdc || !usdc
     ? issue.assets
     : issue.assets.filter((asset) => asset.token.toLowerCase() !== usdc.toLowerCase());
-  const repo = issue.github?.repo;
-  const homepage = repo?.homepage
-    ? repo.homepage.startsWith("http")
-      ? repo.homepage
-      : `https://${repo.homepage}`
-    : null;
   const timeline = issue.activityTimeline;
   const startDate = timeline ? new Date(timeline.startDate) : new Date(issue.createdAt);
   const endDate = timeline ? new Date(timeline.endDate) : new Date();
   const days = timeline?.days ?? [];
-  const linkedPrs = issue.linkedPullRequests ?? [];
-  const isRepoOwner = Boolean(
-    issue.owner &&
-      githubUser &&
-      issue.owner.toLowerCase() === githubUser.login.toLowerCase()
+  const maxDay = timeline?.maxDay ?? (days.length ? Math.max(...days.map((d) => d.day)) : 0);
+  const activityAxisStartUtcMs = Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate());
+  const activityDateAtDay = (day: number) => new Date(activityAxisStartUtcMs + day * 24 * 60 * 60 * 1000);
+  const unlockSchedules = React.useMemo(() => {
+    const list = issue.unlockSchedule ?? [];
+    if (showUsdc) return list;
+    const usdc = usdcAddressForChainId(issue.chainId);
+    if (!usdc) return list;
+    return list.filter((entry) => entry.token.toLowerCase() !== usdc.toLowerCase());
+  }, [issue.unlockSchedule, issue.chainId, showUsdc]);
+  const unlockMaxDay = React.useMemo(() => {
+    let max = 0;
+    unlockSchedules.forEach((entry) => {
+      entry.days.forEach((d) => {
+        if (d.day > max) max = d.day;
+      });
+    });
+    return max;
+  }, [unlockSchedules]);
+
+  const unlockBarRef = React.useRef<HTMLDivElement | null>(null);
+  const [unlockBarWidth, setUnlockBarWidth] = React.useState(0);
+  const [lockedHover, setLockedHover] = React.useState<{ token: string; leftPct: number; text: string } | null>(null);
+  const unlockAxisStartUtcMs = React.useMemo(() => {
+    const now = new Date();
+    // Use the current UTC day boundary as "day 0" for lock labels.
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  }, []);
+  const unlockDateAtDay = React.useCallback(
+    (day: number) => new Date(unlockAxisStartUtcMs + day * 24 * 60 * 60 * 1000),
+    [unlockAxisStartUtcMs]
   );
+
+  React.useEffect(() => {
+    const el = activityBarRef.current;
+    if (!el) return;
+
+    const measure = () => setActivityBarWidth(el.getBoundingClientRect().width);
+    measure();
+
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  React.useEffect(() => {
+    const el = unlockBarRef.current;
+    if (!el) return;
+
+    const measure = () => setUnlockBarWidth(el.getBoundingClientRect().width);
+    measure();
+
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   function formatDate(date: Date) {
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -149,61 +195,560 @@ function ExpandedIssueRow({
     return [...day.events].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }
 
-  return (
-    <div className="grid gap-4 rounded-md bg-muted/40 p-4 text-sm">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-xs uppercase text-muted-foreground">Identifiers</span>
-        <span className="font-mono text-xs">repoHash: {issue.repoHash}</span>
-        <span className="font-mono text-xs">
-          bountyId:{" "}
-          <Link href={`/bounty/${issue.bountyId}`} className="text-primary hover:underline">
-            {issue.bountyId}
-          </Link>
-        </span>
-        <Link
-          href={`/bounty/${issue.bountyId}`}
-          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-          data-no-row-toggle
-        >
-          <Share2 className="h-3.5 w-3.5" />
-          share bounty
-        </Link>
-      </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        <div className="space-y-2">
-          <div className="text-xs uppercase text-muted-foreground">Issue</div>
-          <div className="break-all text-xs">{issue.issueUrl}</div>
-          {issue.github?.title ? <div className="font-medium">{issue.github.title}</div> : null}
-          {issue.github?.state ? (
-            <Badge variant="outline" className="uppercase">
-              {issue.github.state}
-            </Badge>
-          ) : null}
-          {issue.github?.labels?.length ? (
-            <div className="flex flex-wrap gap-1">
-              {issue.github.labels.map((label) => (
-                <span
-                  key={label.name}
-                  className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide"
-                  style={{ borderColor: `#${label.color}` }}
-                >
-                  {label.name}
-                </span>
-              ))}
-            </div>
-          ) : null}
+  function activityLabelForEvents(events: ActivityEvent[]) {
+    if (events.length === 0) return "";
+    const counts: Record<ActivityEvent["type"], number> = {
+      funding: 0,
+      claim: 0,
+      payout: 0,
+      refund: 0,
+      linked_pr: 0,
+    };
+    for (const event of events) counts[event.type] += 1;
+
+    const ordered: Array<[ActivityEvent["type"], string]> = [
+      ["funding", "Funding"],
+      ["claim", "Claim"],
+      ["payout", "Payout"],
+      ["refund", "Refund"],
+      ["linked_pr", "Linked PR"],
+    ];
+    const parts: string[] = [];
+    for (const [key, label] of ordered) {
+      const count = counts[key];
+      if (count <= 0) continue;
+      parts.push(`${count} ${count === 1 ? label : `${label}s`}`);
+    }
+    return parts.join(", ");
+  }
+
+  function clamp(n: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function truncateDecimals(value: string, maxDecimals: number) {
+    const dot = value.indexOf(".");
+    if (dot === -1) return value;
+    const decimals = value.slice(dot + 1);
+    if (decimals.length <= maxDecimals) return value;
+    return `${value.slice(0, dot)}.${decimals.slice(0, maxDecimals)}`;
+  }
+
+  function lockedFundsTooltipForDay(
+    tokenLabel: string,
+    tokenDecimals: number,
+    day: number,
+    totalWei: bigint,
+    lockedRemainingWei: bigint,
+    unlockableTodayWei: bigint
+  ) {
+    const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+    const dateLine = fmt.format(unlockDateAtDay(day));
+
+    const clampedLocked = lockedRemainingWei < 0n ? 0n : lockedRemainingWei;
+    const clampedTotal = totalWei < 0n ? 0n : totalWei;
+    const unlockedWei = clampedTotal > clampedLocked ? clampedTotal - clampedLocked : 0n;
+
+    let locked = clampedLocked.toString();
+    let escrowed = clampedTotal.toString();
+    let unlocked = unlockedWei.toString();
+    let unlockableToday = unlockableTodayWei.toString();
+    try {
+      locked = formatUnits(clampedLocked, tokenDecimals);
+      escrowed = formatUnits(clampedTotal, tokenDecimals);
+      unlocked = formatUnits(unlockedWei, tokenDecimals);
+      unlockableToday = formatUnits(unlockableTodayWei < 0n ? 0n : unlockableTodayWei, tokenDecimals);
+    } catch {
+      // ignore
+    }
+
+    const lines: string[] = [dateLine];
+    lines.push(`Max claimable: ${escrowed} ${tokenLabel}`);
+    lines.push(`Funds locked: ${locked} ${tokenLabel}`);
+    lines.push(`Funds withdrawable by funders: ${unlocked} ${tokenLabel}`);
+    return lines.join("\n");
+  }
+
+  function renderActivityDateAxis() {
+    const dayCount = Math.max(1, maxDay + 1);
+    if (dayCount === 1) {
+      return (
+        <div className="flex justify-between text-[10px] text-muted-foreground">
+          <span>{formatDate(startDate)}</span>
+          <span>{formatDate(endDate)}</span>
         </div>
-        <div className="space-y-2">
-          <div className="text-xs uppercase text-muted-foreground">Assets</div>
+      );
+    }
+
+    const startYear = activityDateAtDay(0).getUTCFullYear();
+    const endYear = activityDateAtDay(maxDay).getUTCFullYear();
+    const sameYear = startYear === endYear;
+
+    const fmtNoYear = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    const fmtWithYear = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+
+    // Rough label widths (px). We thin labels before they visually overlap.
+    const LABEL_NO_YEAR_PX = 44;
+    const LABEL_WITH_YEAR_PX = 76;
+    const LABEL_GAP_PX = 6;
+
+    const isJan1 = (day: number) => {
+      const d = activityDateAtDay(day);
+      return d.getUTCMonth() === 0 && d.getUTCDate() === 1;
+    };
+
+    const includeYearForDay = (day: number) => {
+      // Show year at the ends when the year is the same.
+      if (sameYear) return day === 0 || day === maxDay;
+      // When the year changes across the range, show year at ends and on Jan 1 boundaries.
+      return day === 0 || day === maxDay || isJan1(day);
+    };
+
+    const labelTextForDay = (day: number) => {
+      const d = activityDateAtDay(day);
+      return includeYearForDay(day) ? fmtWithYear.format(d) : fmtNoYear.format(d);
+    };
+
+    const labelWidthForDay = (day: number) => (includeYearForDay(day) ? LABEL_WITH_YEAR_PX : LABEL_NO_YEAR_PX);
+
+    // First pass: pick a cadence from available per-day width.
+    const dayWidth = activityBarWidth > 0 ? activityBarWidth / dayCount : 0;
+    const step = dayWidth > 0 ? Math.max(1, Math.ceil(LABEL_NO_YEAR_PX / dayWidth)) : Math.max(1, Math.ceil(dayCount / 8));
+
+    // Pin endpoints; also pin Jan 1 boundaries if the year changes across the range.
+    const pinned = new Set<number>([0, maxDay]);
+    if (!sameYear) {
+      for (let day = 1; day < maxDay; day++) {
+        if (isJan1(day)) pinned.add(day);
+      }
+    }
+
+    const candidates = new Set<number>(pinned);
+    for (let day = 0; day <= maxDay; day += step) candidates.add(day);
+    candidates.add(maxDay);
+
+    const sorted = Array.from(candidates).sort((a, b) => a - b);
+
+    // Second pass: drop labels that overlap, keeping pinned ones.
+    const kept: Array<{ day: number; start: number; end: number }> = [];
+    const overlapsKept = (startPx: number, endPx: number) =>
+      kept.some((k) => !(endPx + LABEL_GAP_PX <= k.start || startPx - LABEL_GAP_PX >= k.end));
+
+    const tryKeep = (day: number) => {
+      if (activityBarWidth <= 0) {
+        if (pinned.has(day)) kept.push({ day, start: 0, end: 0 });
+        return;
+      }
+
+      const w = labelWidthForDay(day);
+      let startPx = 0;
+      let endPx = 0;
+
+      if (day === 0) {
+        startPx = 0;
+        endPx = w;
+      } else if (day === maxDay) {
+        startPx = Math.max(0, activityBarWidth - w);
+        endPx = activityBarWidth;
+      } else {
+        const x = (day / maxDay) * activityBarWidth;
+        startPx = x - w / 2;
+        endPx = x + w / 2;
+      }
+
+      if (overlapsKept(startPx, endPx)) return;
+      kept.push({ day, start: startPx, end: endPx });
+    };
+
+    Array.from(pinned).sort((a, b) => a - b).forEach((day) => tryKeep(day));
+    sorted.filter((day) => !pinned.has(day)).forEach((day) => tryKeep(day));
+
+    const finalDays = Array.from(new Set(kept.map((k) => k.day))).sort((a, b) => a - b);
+
+    return (
+      <div className="relative h-4 text-[10px] text-muted-foreground">
+        {finalDays.map((day) => {
+          const label = labelTextForDay(day);
+          if (day === 0) {
+            return (
+              <span key={day} className="absolute left-0 top-0 whitespace-nowrap">
+                {label}
+              </span>
+            );
+          }
+          if (day === maxDay) {
+            return (
+              <span key={day} className="absolute right-0 top-0 whitespace-nowrap text-right">
+                {label}
+              </span>
+            );
+          }
+
+          const leftPct = (day / maxDay) * 100;
+          return (
+            <span
+              key={day}
+              className="absolute top-0 -translate-x-1/2 whitespace-nowrap"
+              style={{ left: `${leftPct}%` }}
+            >
+              {label}
+            </span>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderUnlockDateAxis() {
+    const dayCount = Math.max(1, unlockMaxDay + 1);
+    if (dayCount === 1) return null;
+
+    const startYear = unlockDateAtDay(0).getUTCFullYear();
+    const endYear = unlockDateAtDay(unlockMaxDay).getUTCFullYear();
+    const sameYear = startYear === endYear;
+
+    const fmtNoYear = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    const fmtWithYear = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+
+    const LABEL_NO_YEAR_PX = 44;
+    const LABEL_WITH_YEAR_PX = 76;
+    const LABEL_GAP_PX = 6;
+
+    const isJan1 = (day: number) => {
+      const d = unlockDateAtDay(day);
+      return d.getUTCMonth() === 0 && d.getUTCDate() === 1;
+    };
+
+    const includeYearForDay = (day: number) => {
+      if (sameYear) return day === 0 || day === unlockMaxDay;
+      return day === 0 || day === unlockMaxDay || isJan1(day);
+    };
+
+    const labelTextForDay = (day: number) => {
+      const d = unlockDateAtDay(day);
+      return includeYearForDay(day) ? fmtWithYear.format(d) : fmtNoYear.format(d);
+    };
+
+    const labelWidthForDay = (day: number) => (includeYearForDay(day) ? LABEL_WITH_YEAR_PX : LABEL_NO_YEAR_PX);
+
+    const dayWidth = unlockBarWidth > 0 ? unlockBarWidth / dayCount : 0;
+    const step = dayWidth > 0 ? Math.max(1, Math.ceil(LABEL_NO_YEAR_PX / dayWidth)) : Math.max(1, Math.ceil(dayCount / 8));
+
+    const pinned = new Set<number>([0, unlockMaxDay]);
+    if (!sameYear) {
+      for (let day = 1; day < unlockMaxDay; day++) {
+        if (isJan1(day)) pinned.add(day);
+      }
+    }
+
+    const candidates = new Set<number>(pinned);
+    for (let day = 0; day <= unlockMaxDay; day += step) candidates.add(day);
+    candidates.add(unlockMaxDay);
+
+    const sorted = Array.from(candidates).sort((a, b) => a - b);
+
+    const kept: Array<{ day: number; start: number; end: number }> = [];
+    const overlapsKept = (startPx: number, endPx: number) =>
+      kept.some((k) => !(endPx + LABEL_GAP_PX <= k.start || startPx - LABEL_GAP_PX >= k.end));
+
+    const tryKeep = (day: number) => {
+      if (unlockBarWidth <= 0) {
+        if (pinned.has(day)) kept.push({ day, start: 0, end: 0 });
+        return;
+      }
+
+      const w = labelWidthForDay(day);
+      let startPx = 0;
+      let endPx = 0;
+
+      if (day === 0) {
+        startPx = 0;
+        endPx = w;
+      } else if (day === unlockMaxDay) {
+        startPx = Math.max(0, unlockBarWidth - w);
+        endPx = unlockBarWidth;
+      } else {
+        const x = (day / unlockMaxDay) * unlockBarWidth;
+        startPx = x - w / 2;
+        endPx = x + w / 2;
+      }
+
+      if (overlapsKept(startPx, endPx)) return;
+      kept.push({ day, start: startPx, end: endPx });
+    };
+
+    Array.from(pinned).sort((a, b) => a - b).forEach((day) => tryKeep(day));
+    sorted.filter((day) => !pinned.has(day)).forEach((day) => tryKeep(day));
+
+    const finalDays = Array.from(new Set(kept.map((k) => k.day))).sort((a, b) => a - b);
+
+    return (
+      <div className="relative h-4 text-[10px] text-muted-foreground">
+        {finalDays.map((day) => {
+          const label = labelTextForDay(day);
+          if (day === 0) {
+            return (
+              <span key={day} className="absolute left-0 top-0 whitespace-nowrap">
+                {label}
+              </span>
+            );
+          }
+          if (day === unlockMaxDay) {
+            return (
+              <span key={day} className="absolute right-0 top-0 whitespace-nowrap text-right">
+                {label}
+              </span>
+            );
+          }
+
+          const leftPct = (day / unlockMaxDay) * 100;
+          return (
+            <span
+              key={day}
+              className="absolute top-0 -translate-x-1/2 whitespace-nowrap"
+              style={{ left: `${leftPct}%` }}
+              title={label}
+            >
+              {label}
+            </span>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative grid gap-4 rounded-md bg-muted/40 p-4 text-sm">
+      <div className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-5">
+        {unlockSchedules.length ? (
+          <>
+            <div className="text-xs uppercase text-muted-foreground pt-1">Locked funds</div>
+            <div className="min-w-0 space-y-1">
+              {/* Single grid so token labels, bars, and axis share the same column widths. */}
+              <div className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1">
+                {unlockSchedules.map((schedule, scheduleIdx) => {
+                  const meta = getTokenMeta(schedule.token, issue.chainId);
+
+                  let total = 0n;
+                  try {
+                    total = schedule.totalEscrowedWei ? BigInt(schedule.totalEscrowedWei) : 0n;
+                  } catch {
+                    total = 0n;
+                  }
+
+                  // `unlockableByDay` is how much becomes withdrawable for funders at each day.
+                  const unlockableByDay = new Map<number, bigint>();
+                  schedule.days.forEach((d) => {
+                    const prev = unlockableByDay.get(d.day) ?? 0n;
+                    try {
+                      unlockableByDay.set(d.day, prev + BigInt(d.amountWei));
+                    } catch {
+                      // ignore malformed
+                    }
+                  });
+
+                  const dayCount = Math.max(1, unlockMaxDay + 1);
+                  const lockedRemainingByDay: bigint[] = [];
+                  let unlockedSoFar = 0n;
+                  for (let day = 0; day <= unlockMaxDay; day++) {
+                    unlockedSoFar += unlockableByDay.get(day) ?? 0n;
+                    const lockedRemaining = total > unlockedSoFar ? total - unlockedSoFar : 0n;
+                    lockedRemainingByDay.push(lockedRemaining);
+                  }
+
+                  const labelDays = Array.from(unlockableByDay.entries())
+                    .filter(([, amt]) => amt > 0n)
+                    .map(([day]) => day)
+                    .sort((a, b) => a - b);
+
+                  const gridCols = `repeat(${dayCount}, minmax(0, 1fr))`;
+
+                  return (
+                    <React.Fragment key={schedule.token}>
+                      <div className="self-end text-xs text-muted-foreground">{meta.label}</div>
+                      <div
+                        className="grid items-end text-[10px] text-muted-foreground tabular-nums"
+                        style={{ gridTemplateColumns: gridCols }}
+                      >
+                        {labelDays.map((day) => {
+                          const lockedRemaining = lockedRemainingByDay[day] ?? 0n;
+                          if (lockedRemaining <= 0n) return null;
+                          let display = lockedRemaining.toString();
+                          try {
+                            display = formatUnits(lockedRemaining, meta.decimals);
+                          } catch {
+                            // ignore
+                          }
+                          const truncated = truncateDecimals(display, 3);
+                          return (
+                            <div key={day} className="min-w-0 text-center" style={{ gridColumnStart: day + 1 }}>
+                              {truncated}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div />
+                      <div
+                        className="relative w-full min-w-0"
+                        onMouseLeave={() => setLockedHover((prev) => (prev?.token === schedule.token ? null : prev))}
+                      >
+                        {lockedHover && lockedHover.token === schedule.token ? (
+                          <div
+                            className="pointer-events-none absolute -top-2 z-20 -translate-x-1/2 -translate-y-full whitespace-pre rounded-md border bg-background px-2 py-1 text-[10px] text-foreground shadow-md"
+                            style={{ left: `${lockedHover.leftPct}%` }}
+                          >
+                            {lockedHover.text}
+                          </div>
+                        ) : null}
+
+                        <div
+                          ref={scheduleIdx === 0 ? unlockBarRef : null}
+                          className="flex h-2 w-full min-w-0 overflow-hidden rounded-full bg-muted-foreground/20"
+                        >
+                          {Array.from({ length: dayCount }, (_, day) => {
+                            const unlockableToday = unlockableByDay.get(day) ?? 0n;
+                            const lockedRemaining = lockedRemainingByDay[day] ?? 0n;
+                            const tooltip = lockedFundsTooltipForDay(
+                              meta.label,
+                              meta.decimals,
+                              day,
+                              total,
+                              lockedRemaining,
+                              unlockableToday
+                            );
+
+                            const leftPct = clamp(((day + 0.5) / Math.max(1, unlockMaxDay + 1)) * 100, 5, 95);
+
+                            if (lockedRemaining <= 0n) {
+                              return (
+                                <span
+                                  key={day}
+                                  data-no-row-toggle
+                                  className="h-full flex-1 bg-transparent"
+                                  aria-label={tooltip.replaceAll("\n", " · ")}
+                                  onMouseEnter={() => setLockedHover({ token: schedule.token, leftPct, text: tooltip })}
+                                />
+                              );
+                            }
+
+                            let opacity = 0.7;
+                            if (total > 0n) {
+                              const ratio = Number((lockedRemaining * 1000n) / total) / 1000;
+                              const clamped = Math.max(0, Math.min(1, ratio));
+                              const scaled = Math.pow(clamped, 1.6);
+                              opacity = Math.min(1, 0.12 + 0.88 * scaled);
+                            }
+
+                            return (
+                              <span
+                                key={day}
+                                data-no-row-toggle
+                                className="h-full flex-1 bg-foreground"
+                                style={{ opacity }}
+                                aria-label={tooltip.replaceAll("\n", " · ")}
+                                onMouseEnter={() => setLockedHover({ token: schedule.token, leftPct, text: tooltip })}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
+                <div />
+                <div className="min-w-0">{renderUnlockDateAxis()}</div>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        <div className="text-xs uppercase text-muted-foreground pt-1">Activity</div>
+        <div className="min-w-0 space-y-2">
+          <div
+            className="grid items-end text-[10px] text-muted-foreground"
+            style={{ gridTemplateColumns: `repeat(${Math.max(1, maxDay + 1)}, minmax(0, 1fr))` }}
+          >
+            {Array.from({ length: Math.max(1, maxDay + 1) }, (_, day) => {
+              const dayEvents = days.find((d) => d.day === day)?.events ?? [];
+              const label = activityLabelForEvents(dayEvents);
+              return (
+                <div key={day} className="min-w-0 truncate text-center" data-no-row-toggle>
+                  {label}
+                </div>
+              );
+            })}
+          </div>
+          <div
+            ref={activityBarRef}
+            className="grid h-2 overflow-hidden rounded-full bg-muted-foreground/20"
+            style={{ gridTemplateColumns: `repeat(${Math.max(1, maxDay + 1)}, minmax(0, 1fr))` }}
+          >
+            {Array.from({ length: Math.max(1, maxDay + 1) }, (_, day) => {
+              const dayEvents = days.find((d) => d.day === day)?.events ?? [];
+              const events = sortedDayEvents({ day, events: dayEvents });
+
+              if (events.length === 0) {
+                // Explicit "no activity" segment so gaps in the timeline are visible.
+                return <div key={day} data-no-row-toggle className="h-full bg-transparent" />;
+              }
+
+              // Multiple events in a day subdivide that day's segment.
+              return (
+                <div key={day} data-no-row-toggle className="flex h-full overflow-hidden">
+                  {events.map((event, idx) => (
+                    <span key={`${day}-${event.timestamp}-${event.type}-${idx}`} className={`h-full flex-1 ${activityColor(event.type)}`} />
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+          {renderActivityDateAxis()}
+        </div>
+
+	        <div className="text-xs uppercase text-muted-foreground pt-1">History</div>
+	        <div className="min-w-0 space-y-2">
+	          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+	            <span>Fundings: {issue.counts.fundings}</span>
+	            <span aria-hidden="true">·</span>
+	            <span>Claims: {issue.counts.claims}</span>
+	            <span aria-hidden="true">·</span>
+	            <span>Payouts: {issue.counts.payouts}</span>
+	            <span aria-hidden="true">·</span>
+	            <span>Refunds: {issue.counts.refunds}</span>
+	            <span aria-hidden="true">·</span>
+	            <span>Linked PRs: {issue.counts.linkedPrs ?? 0}</span>
+	          </div>
           {assets.length ? (
             <div className="space-y-1 text-xs text-muted-foreground">
               {assets.map((asset) => {
                 const meta = getTokenMeta(asset.token, issue.chainId);
+                let refundedWei = "0";
+                try {
+                  const funded = BigInt(asset.fundedWei);
+                  const escrowed = BigInt(asset.escrowedWei);
+                  const paid = BigInt(asset.paidWei);
+                  const refunded = funded - escrowed - paid;
+                  refundedWei = (refunded > 0n ? refunded : 0n).toString();
+                } catch {
+                  refundedWei = "0";
+                }
                 return (
                   <div key={asset.token}>
                     {meta.label}: {formatAmount(asset.fundedWei, meta.decimals)} funded /{" "}
                     {formatAmount(asset.escrowedWei, meta.decimals)} in active bounty /{" "}
-                    {formatAmount(asset.paidWei, meta.decimals)} paid
+                    {formatAmount(asset.paidWei, meta.decimals)} paid /{" "}
+                    {formatAmount(refundedWei, meta.decimals)} refunded/withdrawn
                   </div>
                 );
               })}
@@ -212,102 +757,27 @@ function ExpandedIssueRow({
             <div className="text-xs text-muted-foreground">No assets recorded.</div>
           )}
         </div>
-        <div className="space-y-2 md:col-span-2">
-          <div className="text-xs uppercase text-muted-foreground">Repository</div>
-          {repo?.description ? (
-            <div className="text-sm">{repo.description}</div>
-          ) : (
-            <div className="text-xs text-muted-foreground">No description available.</div>
-          )}
-          {homepage ? (
-            <div className="text-xs text-muted-foreground">
-              Website:{" "}
-              <a href={homepage} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                {repo?.homepage}
-              </a>
-            </div>
-          ) : null}
-        </div>
-        <div className="space-y-2 md:col-span-2">
-          <div className="text-xs uppercase text-muted-foreground">Last updated</div>
-          <div className="text-xs text-muted-foreground">
-            {formatRelativeDate(issue.updatedAt)} · {new Date(issue.updatedAt).toLocaleString()}
-          </div>
-        </div>
-        <div className="space-y-2 md:col-span-2">
-          <div className="text-xs uppercase text-muted-foreground">Linked pull requests</div>
-          {linkedPrs.length ? (
-            <div className="grid gap-1 text-xs text-muted-foreground">
-              {linkedPrs.map((pr) => (
-                <a key={pr.prUrl} href={pr.prUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-                  {pr.prUrl}
-                </a>
-              ))}
-            </div>
-          ) : (
-            <div className="text-xs text-muted-foreground">No linked PRs yet.</div>
-          )}
-        </div>
-        <div className="space-y-3 md:col-span-2">
-          <div className="text-xs uppercase text-muted-foreground">Activity</div>
-          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-            <span>Fundings: {issue.counts.fundings}</span>
-            <span>Claims: {issue.counts.claims}</span>
-            <span>Payouts: {issue.counts.payouts}</span>
-            <span>Refunds: {issue.counts.refunds}</span>
-            <span>Linked PRs: {issue.counts.linkedPrs ?? 0}</span>
-          </div>
-          <div className="space-y-2">
-            <div className="flex h-2 overflow-hidden rounded-full bg-muted">
-              {days
-                .flatMap((day) => sortedDayEvents(day).map((event) => ({ day: day.day, event })))
-                .sort((a, b) => {
-                  const aTime = new Date(a.event.timestamp).getTime();
-                  const bTime = new Date(b.event.timestamp).getTime();
-                  if (aTime !== bTime) return aTime - bTime;
-                  return a.day - b.day;
-                })
-                .map(({ event }, idx) => (
-                  <span
-                    key={`${event.timestamp}-${event.type}-${idx}`}
-                    className={`h-full flex-1 ${activityColor(event.type)}`}
-                  />
-                ))}
-            </div>
-            <div className="flex justify-between text-[10px] text-muted-foreground">
-              <span>{formatDate(startDate)}</span>
-              <span>{formatDate(endDate)}</span>
-            </div>
-          </div>
-        </div>
-        <div className="space-y-2 md:col-span-2">
-          <div className="text-xs uppercase text-muted-foreground">Claim bounty</div>
-          {walletAddress ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <Button size="sm" onClick={() => onClaim(issue)}>
-                Submit claim
-              </Button>
-              <span className="text-xs text-muted-foreground">Use your PR URL to claim this bounty.</span>
-            </div>
-          ) : (
-            <div className="text-xs text-muted-foreground">Connect a wallet to submit a claim.</div>
-          )}
-        </div>
-        <div className="space-y-2 md:col-span-2">
-          <div className="text-xs uppercase text-muted-foreground">Payouts</div>
-          {isRepoOwner ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="secondary" onClick={() => onPayOutBounty(issue)}>
-                Pay out bounty
-              </Button>
-              {!walletAddress ? (
-                <span className="text-xs text-muted-foreground">Connect a wallet to submit payouts.</span>
-              ) : null}
-            </div>
-          ) : (
-            <div className="text-xs text-muted-foreground">Payouts are available to the repo owner.</div>
-          )}
-        </div>
+
+	        <div className="text-xs uppercase text-muted-foreground pt-1">Identifiers</div>
+	        <div className="min-w-0">
+	          <div className="flex flex-wrap items-center gap-3 text-muted-foreground">
+	            <Link
+	              href={`/bounty/${issue.bountyId}`}
+	              className="inline-flex items-center gap-1 text-xs text-foreground hover:underline"
+	              data-no-row-toggle
+	            >
+	              <Share2 className="h-3.5 w-3.5" />
+	              share bounty
+	            </Link>
+	            <span className="font-mono text-xs">repoHash: {issue.repoHash}</span>
+	            <span className="font-mono text-xs">
+	              bountyId:{" "}
+	              <Link href={`/bounty/${issue.bountyId}`} className="text-muted-foreground hover:underline hover:text-foreground">
+	                {issue.bountyId}
+	              </Link>
+	            </span>
+	          </div>
+	        </div>
       </div>
     </div>
   );
@@ -321,9 +791,7 @@ export function IssuesDataTable({
   myFundingOnly,
   setMyFundingOnly,
   githubUser,
-  onAddIssue,
   onClaim,
-  onPayOutBounty,
 }: {
   columns: ColumnDef<IssueRow>[];
   data: IssueRow[];
@@ -332,9 +800,7 @@ export function IssuesDataTable({
   myFundingOnly: boolean;
   setMyFundingOnly: (next: boolean) => void;
   githubUser: GithubUser | null;
-  onAddIssue: () => void;
   onClaim: (issue: IssueRow) => void;
-  onPayOutBounty: (issue: IssueRow) => void;
 }) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -408,33 +874,40 @@ export function IssuesDataTable({
         myFundingOnly={myFundingOnly}
         setMyFundingOnly={setMyFundingOnly}
         githubUser={githubUser}
-        onAddIssue={onAddIssue}
       />
       <div className="rounded-md border">
         <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead key={header.id}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
+	          <TableHeader>
+	            {table.getHeaderGroups().map((headerGroup) => (
+	              <TableRow key={headerGroup.id}>
+	                {headerGroup.headers.map((header) => (
+	                  <TableHead
+	                    key={header.id}
+	                    className={cn((header.column.columnDef.meta as any)?.thClassName)}
+	                  >
+	                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+	                  </TableHead>
+	                ))}
+	              </TableRow>
+	            ))}
+	          </TableHeader>
           <TableBody>
             {table.getRowModel().rows?.length ? (
               table.getRowModel().rows.map((row) => (
                 <React.Fragment key={row.id}>
-                  <TableRow
-                    onClick={(event) => handleRowClick(event, row.id)}
-                    className="cursor-pointer"
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                    ))}
-                  </TableRow>
+	                  <TableRow
+	                    onClick={(event) => handleRowClick(event, row.id)}
+	                    className="cursor-pointer"
+	                  >
+	                    {row.getVisibleCells().map((cell) => (
+	                      <TableCell
+	                        key={cell.id}
+	                        className={cn((cell.column.columnDef.meta as any)?.tdClassName)}
+	                      >
+	                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+	                      </TableCell>
+	                    ))}
+	                  </TableRow>
                   {row.getIsExpanded() ? (
                     <TableRow>
                       <TableCell colSpan={columns.length}>
@@ -444,7 +917,6 @@ export function IssuesDataTable({
                           walletAddress={walletAddress}
                           githubUser={githubUser}
                           onClaim={onClaim}
-                          onPayOutBounty={onPayOutBounty}
                         />
                       </TableCell>
                     </TableRow>

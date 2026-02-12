@@ -2,6 +2,7 @@
 
 import type { ColumnDef } from "@tanstack/react-table";
 import { formatUnits } from "viem";
+import type { Address } from "viem";
 import { ArrowUpDown, ExternalLink } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +12,14 @@ import { usdcAddressForChainId } from "@gh-bounties/shared";
 import type { GithubIssueLabel, IssueRow, UnlockSchedule } from "./types";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+function prNumberFromUrl(url: string): number | null {
+  // Expected: https://github.com/<owner>/<repo>/pull/<n>
+  const m = url.match(/\/pull\/(\d+)(?:\/|$|\?)/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
 
 function labelTextColor(hex: string) {
   const sanitized = hex.replace("#", "");
@@ -92,30 +101,45 @@ function totalEscrowedForSort(issue: IssueRow) {
 }
 
 function UnlockBar({ schedule }: { schedule: UnlockSchedule | null }) {
-  const days = schedule?.days ?? [];
-  const maxDay = days.length ? Math.max(1, ...days.map((d) => d.day)) : 0;
+  const entries = schedule?.days ?? [];
   const total = schedule?.totalEscrowedWei ? BigInt(schedule.totalEscrowedWei) : 0n;
+  const maxDay = entries.reduce((m, e) => (e.day > m ? e.day : m), 0);
+
+  // Render a per-day strip (including gap-days) so label positions are meaningful (1d, 3d, 14d, ...).
+  const byDay: bigint[] = Array.from({ length: maxDay + 1 }, () => 0n);
+  for (const entry of entries) {
+    if (entry.day < 0 || entry.day > maxDay) continue;
+    try {
+      byDay[entry.day] += BigInt(entry.amountWei);
+    } catch {
+      // ignore malformed amounts
+    }
+  }
 
   return (
-    <div className="flex-1">
-      <div className="flex h-2 overflow-hidden rounded-full bg-muted">
-        {days.map((entry) => {
-          let opacity = 0.7;
-          if (total > 0n) {
-            try {
-              const ratio = Number((BigInt(entry.amountWei) * 1000n) / total) / 1000;
-              opacity = Math.max(0.3, Math.min(1, 0.4 + ratio));
-            } catch {
-              opacity = 0.7;
-            }
+    <div
+      className="grid h-2 w-full self-center overflow-hidden rounded-full bg-muted-foreground/20"
+      style={{ gridTemplateColumns: `repeat(${byDay.length}, minmax(0, 1fr))` }}
+    >
+      {byDay.map((amountWei, day) => {
+        let opacity = 0.7;
+        if (total > 0n) {
+          try {
+            const ratio = Number((amountWei * 1000n) / total) / 1000;
+            // Wider range of grays: small buckets should be noticeably lighter.
+            const clamped = Math.max(0, Math.min(1, ratio));
+            const scaled = Math.pow(clamped, 1.6); // push small buckets lighter (more contrast)
+            opacity = Math.min(1, 0.08 + 0.95 * scaled);
+          } catch {
+            opacity = 0.7;
           }
-          return <span key={entry.day} className="h-full flex-1 bg-foreground" style={{ opacity }} />;
-        })}
-      </div>
-      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-        <span>0d</span>
-        <span>{maxDay}d</span>
-      </div>
+        } else {
+          opacity = 0;
+        }
+        // Gap-days should show as the bar background (not a faint segment).
+        if (amountWei === 0n) opacity = 0;
+        return <span key={day} className="h-full bg-foreground" style={{ opacity }} />;
+      })}
     </div>
   );
 }
@@ -124,14 +148,14 @@ function assetLine(
   label: string,
   totals: IssueRow["assets"][number] | undefined,
   decimals: number,
-  schedule: UnlockSchedule | null
+  _schedule: UnlockSchedule | null
 ) {
   const amount = totals ? truncateDecimals(formatAssetValue(totals.escrowedWei, decimals), 4) : "0";
+  // Timeline temporarily disabled (keep only the headline amount).
   return (
-    <div className="flex items-center gap-3">
-      <span className="text-xs text-muted-foreground tabular-nums">{amount}</span>
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      <UnlockBar schedule={schedule} />
+    <div className="inline-flex items-center gap-1 whitespace-nowrap">
+      <span className="text-xs font-medium tabular-nums">{amount}</span>
+      <span className="text-xs font-medium">{label}</span>
     </div>
   );
 }
@@ -139,7 +163,6 @@ function assetLine(
 function statusVariant(status: string) {
   const normalized = status.toUpperCase();
   if (normalized === "OPEN") return "success";
-  if (normalized === "IMPLEMENTED") return "secondary";
   if (normalized === "CLOSED") return "outline";
   return "default";
 }
@@ -147,8 +170,11 @@ function statusVariant(status: string) {
 export function createIssueColumns(options: {
   onAddFunds: (issue: IssueRow) => void;
   onClaim: (issue: IssueRow) => void;
+  onPayOutBounty: (issue: IssueRow) => void;
   showUsdc: boolean;
   ownersWithPayouts: Set<string>;
+  walletAddress: Address | null;
+  githubLogin: string | null;
 })
   : ColumnDef<IssueRow>[] {
   return [
@@ -190,17 +216,25 @@ export function createIssueColumns(options: {
       },
     },
     {
-      accessorKey: "status",
-      header: "Status",
+      id: "status",
+      accessorFn: (row) => {
+        const s = row.github?.state;
+        if (!s) return "UNKNOWN";
+        if (s.toLowerCase() === "open") return "OPEN";
+        if (s.toLowerCase() === "closed") return "CLOSED";
+        return s.toUpperCase();
+      },
+	      header: "Issue Status",
       filterFn: (row, id, values) => {
         if (!values) return true;
         const list = Array.isArray(values) ? values : [values];
         if (list.length === 0) return true;
         return list.includes(row.getValue(id));
       },
-      cell: ({ row }) => (
-        <Badge variant={statusVariant(row.original.status) as any}>{row.original.status}</Badge>
-      ),
+      cell: ({ row }) => {
+        const status = row.getValue("status") as string;
+        return <Badge variant={statusVariant(status) as any}>{status}</Badge>;
+      },
     },
     {
       id: "owner",
@@ -246,15 +280,20 @@ export function createIssueColumns(options: {
       accessorFn: (row) => totalEscrowedForSort(row).toString(),
       enableSorting: true,
       header: ({ column }) => (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 px-2"
-          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        >
-          In active bounty
-          <ArrowUpDown className="ml-2 h-3.5 w-3.5 text-muted-foreground" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <span>Current Bounty</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            aria-label="Sort by current bounty"
+            title="Sort"
+          >
+            <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+          </Button>
+        </div>
       ),
       sortingFn: (rowA, rowB) => {
         const issueA = rowA.original as IssueRow;
@@ -291,25 +330,73 @@ export function createIssueColumns(options: {
     {
       id: "linkedPrs",
       header: "Linked PRs",
-      cell: ({ row }) => (
-        <div className="text-xs text-muted-foreground">
-          {row.original.counts.linkedPrs ?? 0}
-        </div>
-      ),
+      cell: ({ row }) => {
+        const linked = row.original.linkedPullRequests ?? [];
+        if (linked.length === 0) {
+          return <div className="text-xs text-muted-foreground">0</div>;
+        }
+
+        return (
+          <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            {linked
+              .map((pr) => ({ ...pr, num: prNumberFromUrl(pr.prUrl) }))
+              .sort((a, b) => {
+                // Sort by PR number when possible (stable-ish display); fallback to URL.
+                if (a.num != null && b.num != null) return a.num - b.num;
+                if (a.num != null) return -1;
+                if (b.num != null) return 1;
+                return a.prUrl.localeCompare(b.prUrl);
+              })
+              .map((pr) => {
+                const label = pr.num != null ? `#${pr.num}` : pr.prUrl;
+                return (
+                  <a
+                    key={pr.prUrl}
+                    href={pr.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    data-no-row-toggle
+                    className="transition-colors hover:text-foreground"
+                    title={pr.prUrl}
+                  >
+                    {label}
+                  </a>
+                );
+              })}
+          </div>
+        );
+      },
     },
     {
       id: "actions",
       header: "",
+      meta: {
+        thClassName: "w-[1%] whitespace-nowrap",
+        tdClassName: "w-[1%] whitespace-nowrap",
+      },
       cell: ({ row }) => {
         const issue = row.original;
+        const isRepoOwner = Boolean(
+          issue.owner && options.githubLogin && issue.owner.toLowerCase() === options.githubLogin.toLowerCase()
+        );
+        const isFunder = Boolean(
+          options.walletAddress &&
+            issue.funders?.some((funder) => funder.toLowerCase() === options.walletAddress?.toLowerCase())
+        );
+        const canPayOut = isRepoOwner || isFunder;
         return (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center">
             <Button size="sm" onClick={() => options.onAddFunds(issue)}>
               Fund bounty
             </Button>
             <Button size="sm" variant="outline" onClick={() => options.onClaim(issue)}>
               Submit claim
             </Button>
+            {canPayOut ? (
+              <Button size="sm" variant="secondary" onClick={() => options.onPayOutBounty(issue)}>
+                Payout
+              </Button>
+            ) : null}
           </div>
         );
       },

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import type { Table } from "@tanstack/react-table";
-import { CheckCircle2, Circle, Tag, User, UserRound, X, XCircle } from "lucide-react";
+import { Circle, Tag, User, UserRound, X, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,6 @@ export function DataTableToolbar({
   myFundingOnly,
   setMyFundingOnly,
   githubUser,
-  onAddIssue,
 }: {
   table: Table<IssueRow>;
   globalFilter: string;
@@ -28,7 +27,6 @@ export function DataTableToolbar({
   myFundingOnly: boolean;
   setMyFundingOnly: (next: boolean) => void;
   githubUser: { login: string } | null;
-  onAddIssue: () => void;
 }) {
   const statusColumn = table.getColumn("status");
   const isFiltered = table.getState().columnFilters.length > 0 || globalFilter.length > 0 || myFundingOnly;
@@ -131,10 +129,9 @@ export function DataTableToolbar({
         {statusColumn ? (
           <DataTableFacetedFilter
             column={statusColumn}
-            title="Status"
+	            title="Issue Status"
             options={[
               { label: "Open", value: "OPEN", icon: Circle },
-              { label: "Implemented", value: "IMPLEMENTED", icon: CheckCircle2 },
               { label: "Closed", value: "CLOSED", icon: XCircle },
             ]}
           />
@@ -189,11 +186,6 @@ export function DataTableToolbar({
             <X className="ml-2 h-4 w-4" />
           </Button>
         ) : null}
-      </div>
-      <div className="flex items-center gap-2">
-        <Button size="sm" onClick={onAddIssue} disabled={!walletAddress}>
-          Add issue / fund bounty
-        </Button>
       </div>
     </div>
   );
