@@ -16,7 +16,7 @@ import type { GithubUser } from "@/lib/hooks/useGithubUser";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
 
-type AssetChoice = "ALL" | "ETH" | "USDC" | "TREASURY_USDC";
+type AssetChoice = "ALL" | "ETH" | "USDC";
 
 export function AdminPayoutDialog({
   open,
@@ -44,9 +44,6 @@ export function AdminPayoutDialog({
   const [asset, setAsset] = React.useState<AssetChoice>("ALL");
   const [recipient, setRecipient] = React.useState("");
   const [amount, setAmount] = React.useState("");
-  const [destinationChain, setDestinationChain] = React.useState("Base_Sepolia");
-  const [treasury, setTreasury] = React.useState<any | null>(null);
-  const [treasuryEnabled, setTreasuryEnabled] = React.useState(false);
   const [autoAmount, setAutoAmount] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -56,7 +53,6 @@ export function AdminPayoutDialog({
 
   const escrowedEth = escrowedByToken?.[ETH_ADDRESS.toLowerCase()] || "0";
   const escrowedUsdc = usdcAddress ? escrowedByToken?.[usdcAddress.toLowerCase()] || "0" : "0";
-  const treasuryAvailable = treasury?.availableUsdc ?? "0";
 
   const hasAnyOnchain = (() => {
     try {
@@ -66,20 +62,11 @@ export function AdminPayoutDialog({
     }
   })();
 
-  const hasTreasury = (() => {
-    try {
-      return BigInt(treasuryAvailable) > 0n;
-    } catch {
-      return false;
-    }
-  })();
-
   const maxForAsset = React.useMemo(() => {
     if (asset === "ETH") return { raw: escrowedEth, decimals: 18 };
     if (asset === "USDC") return { raw: escrowedUsdc, decimals: 6 };
-    if (asset === "TREASURY_USDC") return { raw: treasuryAvailable, decimals: 6 };
     return { raw: "0", decimals: 6 };
-  }, [asset, escrowedEth, escrowedUsdc, treasuryAvailable]);
+  }, [asset, escrowedEth, escrowedUsdc]);
 
   const maxDisplay = React.useMemo(() => {
     try {
@@ -94,34 +81,16 @@ export function AdminPayoutDialog({
     setRecipient(walletAddress || "");
     setError(null);
     setAutoAmount(true);
-
-    fetch(`${apiUrl}/treasury/config`)
-      .then((r) => r.json())
-      .then((json) => setTreasuryEnabled(Boolean(json?.enabled)))
-      .catch(() => setTreasuryEnabled(false));
-
-    if (bountyId) {
-      fetch(`${apiUrl}/treasury/ledger?bountyId=${encodeURIComponent(bountyId)}`)
-        .then((r) => r.json())
-        .then((json) => setTreasury(json?.ledger ?? null))
-        .catch(() => setTreasury(null));
-    } else {
-      setTreasury(null);
-    }
-  }, [open, apiUrl, bountyId, walletAddress]);
+  }, [open, walletAddress]);
 
   React.useEffect(() => {
     if (!open) return;
-    if (!hasAnyOnchain && hasTreasury && treasuryEnabled) {
-      setAsset("TREASURY_USDC");
-      return;
-    }
-    if (hasAnyOnchain || (hasTreasury && treasuryEnabled)) {
+    if (hasAnyOnchain) {
       setAsset("ALL");
     } else {
       setAsset("ETH");
     }
-  }, [open, hasAnyOnchain, hasTreasury, treasuryEnabled]);
+  }, [open, hasAnyOnchain]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -175,23 +144,6 @@ export function AdminPayoutDialog({
     await pc.waitForTransactionReceipt({ hash });
   }
 
-  async function submitTreasuryPayout(opts: { amountUsdc: string }) {
-    if (!bountyId) throw new Error("Missing bounty id.");
-    const res = await fetch(`${apiUrl}/treasury/payout-intents`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        bountyId,
-        recipient: recipient.trim(),
-        destinationChain,
-        amountUsdc: opts.amountUsdc,
-      }),
-    });
-    const json = (await res.json()) as any;
-    if (!res.ok) throw new Error(json?.error ?? `Failed to create payout intent (${res.status})`);
-  }
-
   async function submit() {
     if (!walletAddress) return;
     if (!bountyId) {
@@ -212,10 +164,6 @@ export function AdminPayoutDialog({
     }
     if (asset === "USDC" && !usdcAddress) {
       setError("USDC is not configured for this chain.");
-      return;
-    }
-    if ((asset === "TREASURY_USDC" || asset === "ALL") && !treasuryEnabled) {
-      setError("Treasury is not enabled on the API.");
       return;
     }
 
@@ -242,17 +190,6 @@ export function AdminPayoutDialog({
         }
       }
 
-      if (asset === "ALL" || asset === "TREASURY_USDC") {
-        if (treasuryEnabled) {
-          const amountUsdc =
-            asset === "ALL" ? formatUnits(BigInt(treasuryAvailable || "0"), 6) : amount;
-          if (Number(amountUsdc) > 0) {
-            await submitTreasuryPayout({ amountUsdc });
-            didSubmit = true;
-          }
-        }
-      }
-
       if (!didSubmit) {
         throw new Error("No payoutable balance available for the selected asset.");
       }
@@ -269,7 +206,6 @@ export function AdminPayoutDialog({
   const allSummary = [
     `ETH: ${formatUnits(BigInt(escrowedEth || "0"), 18)}`,
     `USDC: ${formatUnits(BigInt(escrowedUsdc || "0"), 6)}`,
-    treasuryEnabled ? `Treasury USDC: ${formatUnits(BigInt(treasuryAvailable || "0"), 6)}` : null,
   ]
     .filter(Boolean)
     .join(" • ");
@@ -308,28 +244,12 @@ export function AdminPayoutDialog({
                 <SelectItem value="ALL">All assets</SelectItem>
                 <SelectItem value="ETH">ETH (escrow)</SelectItem>
                 <SelectItem value="USDC">USDC (escrow)</SelectItem>
-                {treasuryEnabled ? <SelectItem value="TREASURY_USDC">USDC (treasury)</SelectItem> : null}
               </SelectContent>
             </Select>
             <div className="text-xs text-muted-foreground">
               {asset === "ALL" ? allSummary : `Max: ${maxDisplay}`}
             </div>
           </div>
-
-          {(asset === "TREASURY_USDC" || asset === "ALL") && treasuryEnabled ? (
-            <div className="grid gap-2">
-              <Label>Destination chain</Label>
-              <Select value={destinationChain} onValueChange={setDestinationChain}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select chain" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Arc_Testnet">Arc Testnet</SelectItem>
-                  <SelectItem value="Base_Sepolia">Base Sepolia</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
 
           <div className="grid gap-2">
             <Label htmlFor="recipient">Recipient</Label>

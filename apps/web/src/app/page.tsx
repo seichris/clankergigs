@@ -17,7 +17,6 @@ import { FundIssueDialog } from "@/components/fund-issue-dialog";
 import { ClaimBountyDialog } from "@/components/claim-bounty-dialog";
 import { PayoutDialog } from "@/components/payout-dialog";
 import { AdminPayoutDialog } from "@/components/admin-payout-dialog";
-import { TreasuryDialog } from "@/components/treasury-dialog";
 import { createIssueColumns } from "@/components/issues-table/columns";
 import { IssuesDataTable } from "@/components/issues-table/data-table";
 import type { IssueRow } from "@/components/issues-table/types";
@@ -42,8 +41,8 @@ function addressGradientStyle(addr: string) {
 }
 
 function chainLabel(chainId: number) {
-  if (chainId === 1) return "Ethereum + Arc";
-  if (chainId === 11155111) return "Sepolia + Arc";
+  if (chainId === 1) return "Ethereum";
+  if (chainId === 11155111) return "Sepolia";
   if (chainId === 31337) return "Local";
   return `Chain ${chainId}`;
 }
@@ -74,8 +73,6 @@ export default function Home() {
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [prefillIssueUrl, setPrefillIssueUrl] = React.useState<string | null>(null);
   const [myFundingOnly, setMyFundingOnly] = React.useState(false);
-  const [treasuryOpen, setTreasuryOpen] = React.useState(false);
-  const [treasuryIssue, setTreasuryIssue] = React.useState<IssueRow | null>(null);
   const [claimIssue, setClaimIssue] = React.useState<IssueRow | null>(null);
   const [claimOpen, setClaimOpen] = React.useState(false);
   const [payoutIssue, setPayoutIssue] = React.useState<IssueRow | null>(null);
@@ -176,14 +173,6 @@ export default function Home() {
       setDialogOpen(true);
     },
     [address]
-  );
-
-  const handleTreasury = React.useCallback(
-    (issue: IssueRow) => {
-      setTreasuryIssue(issue);
-      setTreasuryOpen(true);
-    },
-    []
   );
 
   const handleClaimOpen = React.useCallback(
@@ -416,7 +405,6 @@ export default function Home() {
             onClaim={handleClaimOpen}
             onPayout={handlePayoutOpen}
             onAdminPayout={handleAdminPayoutOpen}
-            onTreasury={handleTreasury}
           />
         )}
       </div>
@@ -487,20 +475,6 @@ export default function Home() {
             : undefined
         }
         onPayouted={() => fetchIssues()}
-      />
-
-      <TreasuryDialog
-        open={treasuryOpen}
-        onOpenChange={(next) => {
-          setTreasuryOpen(next);
-          if (!next) setTreasuryIssue(null);
-        }}
-        apiUrl={apiUrl}
-        bountyId={treasuryIssue?.bountyId ?? null}
-        issueUrl={treasuryIssue?.issueUrl ?? null}
-        walletAddress={address}
-        githubUser={user}
-        onGithubLogin={login}
       />
     </main>
   );

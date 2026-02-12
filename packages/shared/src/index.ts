@@ -11,7 +11,6 @@ export const USDC = {
   worldChainSepolia: "0x66145f38cBAC35Ca6F1Dfb4914dF98F1614aeA88",
   seiAtlantic: "0x4fCF1784B31630811181f670Aea7A7bEF803eaED",
   hyperEvmTestnet: "0x2B3370eE501B4a559b57D449569354196457D8Ab",
-  arcTestnet: "0x3600000000000000000000000000000000000000",
   // Testnets (CCTP-only, not Gateway)
   arbitrumSepolia: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
   opSepolia: "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
@@ -28,7 +27,6 @@ export function usdcAddressForChainId(chainId: number): string | null {
   if (chainId === 4801) return USDC.worldChainSepolia;     // World Chain Sepolia
   if (chainId === 1328) return USDC.seiAtlantic;           // Sei Atlantic-2
   if (chainId === 998) return USDC.hyperEvmTestnet;        // HyperEVM Testnet
-  if (chainId === 5042002) return USDC.arcTestnet;         // Arc Testnet
   // Testnets (CCTP-only, not Gateway)
   if (chainId === 421614) return USDC.arbitrumSepolia;
   if (chainId === 11155420) return USDC.opSepolia;

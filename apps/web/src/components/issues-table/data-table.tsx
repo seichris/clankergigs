@@ -66,7 +66,6 @@ function ExpandedIssueRow({
   onClaim,
   onPayout,
   onAdminPayout,
-  onTreasury,
 }: {
   issue: IssueRow;
   showUsdc: boolean;
@@ -74,7 +73,6 @@ function ExpandedIssueRow({
   onClaim: (issue: IssueRow) => void;
   onPayout: (issue: IssueRow, mode: "funder" | "dao") => void;
   onAdminPayout: (issue: IssueRow) => void;
-  onTreasury?: (issue: IssueRow) => void;
 }) {
   const usdc = usdcAddressForChainId(issue.chainId);
   const assets = showUsdc || !usdc
@@ -287,11 +285,6 @@ function ExpandedIssueRow({
               <Button size="sm" onClick={() => onAdminPayout(issue)}>
                 Admin payout
               </Button>
-              {onTreasury ? (
-                <Button variant="outline" size="sm" onClick={() => onTreasury(issue)}>
-                  Treasury
-                </Button>
-              ) : null}
               <Button variant="outline" size="sm" onClick={() => onPayout(issue, "funder")}>
                 Funder payout
               </Button>
@@ -320,7 +313,6 @@ export function IssuesDataTable({
   onClaim,
   onPayout,
   onAdminPayout,
-  onTreasury,
 }: {
   columns: ColumnDef<IssueRow>[];
   data: IssueRow[];
@@ -333,7 +325,6 @@ export function IssuesDataTable({
   onClaim: (issue: IssueRow) => void;
   onPayout: (issue: IssueRow, mode: "funder" | "dao") => void;
   onAdminPayout: (issue: IssueRow) => void;
-  onTreasury?: (issue: IssueRow) => void;
 }) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -444,7 +435,6 @@ export function IssuesDataTable({
                           onClaim={onClaim}
                           onPayout={onPayout}
                           onAdminPayout={onAdminPayout}
-                          onTreasury={onTreasury}
                         />
                       </TableCell>
                     </TableRow>

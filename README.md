@@ -59,7 +59,6 @@ The API uses a local SQLite DB for indexing + metadata. If you switch git branch
 
 To isolate, set a different DB file per branch, e.g.:
 - main: `DATABASE_URL=file:./prisma/dev-main.db`
-- Arc feature work: `DATABASE_URL_FEAT_ARC=file:./prisma/dev-feat-arc.db` (this branch auto-uses it if `DATABASE_URL` is unset)
 
 ### Local dev (Anvil)
 1) Start a local chain:
@@ -106,24 +105,6 @@ To isolate, set a different DB file per branch, e.g.:
 4) Run API + web:
    - `pnpm --filter @gh-bounties/api dev`
    - `pnpm --filter @gh-bounties/web dev`
-
-### Global USDC Treasury (Arc + Circle Gateway + Bridge Kit)
-This repo also supports a **USDC treasury payout rail** that is separate from the on-chain bounty contract:
-
-1) Set API env (root `.env`):
-   - `TREASURY_ENABLED=1`
-   - `CIRCLE_GATEWAY_API_URL=https://gateway-api-testnet.circle.com`
-   - `TREASURY_ARC_CHAIN_ID=5042002`
-   - `TREASURY_ARC_RPC_URL=https://rpc.testnet.arc.network`
-   - `TREASURY_DESTINATION_CALLER_PRIVATE_KEY=0x...` (must have Arc gas)
-   - `TREASURY_ADDRESS=0x...` (must match the private key’s address; MVP constraint)
-   - (optional, recommended) Circle Wallets adapter for Bridge Kit payouts:
-     - `CIRCLE_API_KEY=...`
-     - `CIRCLE_ENTITY_SECRET=...`
-2) Run API + web as usual.
-3) In the web UI:
-   - Fund: “Add funds” → “USDC (Global via Gateway)”
-   - Manage: row actions → “Treasury” (creates payout intents; Bridge Kit executes them in the background)
 
 ### Deploy (Sepolia / Mainnet)
 - Contract deploy prints the deployed address:

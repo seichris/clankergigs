@@ -8,8 +8,6 @@ import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.j
 import { backfillLinkedPullRequests } from "./github/backfill.js";
 import { getPrisma } from "./db.js";
 import { createApiSession, resolveGithubAuthFromRequest, revokeApiSession } from "./auth/sessions.js";
-import { registerTreasuryRoutes } from "./treasury/routes.js";
-import { startTreasuryOrchestrator } from "./treasury/orchestrator.js";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -58,7 +56,6 @@ async function main() {
         : null;
 
   const app = await buildServer({ github });
-  registerTreasuryRoutes(app);
 
   app.get("/id", async (req, reply) => {
     const q = req.query as { repo?: string; issue?: string };
@@ -830,10 +827,6 @@ async function main() {
     })();
   } else {
     app.log.warn("CONTRACT_ADDRESS is empty; indexer disabled");
-  }
-
-  if (env.TREASURY_ENABLED) {
-    startTreasuryOrchestrator(app.log);
   }
 
   if (env.GITHUB_BACKFILL_INTERVAL_MINUTES > 0) {
