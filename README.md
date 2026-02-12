@@ -47,12 +47,8 @@ apps/web/
   src/components/     # UI + feature components
   src/lib/            # Client helpers/hooks
 
-apps/api-sui/          # Sui API + indexer (separate stack)
-apps/web-sui/          # Sui web viewer (separate stack)
-
 packages/shared/src/  # Shared helpers (repoHash/bountyId, addresses)
 scripts-for-ai-agents/# CLI agent scripts (cast/curl/jq/gh)
-sui/                  # Sui Move packages
 ```
 
 ### Setup
@@ -136,12 +132,6 @@ This repo also supports a **USDC treasury payout rail** that is separate from th
   - Mainnet stack: `CHAIN_ID=1` + mainnet `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the mainnet web origin.
   - Sepolia stack: `CHAIN_ID=11155111` + Sepolia `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the Sepolia web origin.
   - Web network switch (optional): set `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET` and `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA` so users can jump between the two webapps.
-
-### Sui stack (prototype)
-- Sui is implemented as a **separate stack** (do not mix with the EVM API/DB):
-  - `apps/api-sui/` (Sui indexer + API; its own `DATABASE_URL`)
-  - `apps/web-sui/` (Sui web viewer; intended for `sui.clankergigs.com`)
-- See `SUI.md` for the plan and local dev notes.
 
 ## Roadmap
 - Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures
