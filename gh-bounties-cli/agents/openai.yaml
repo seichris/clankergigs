@@ -1,0 +1,7 @@
+interface:
+  display_name: "GH Bounties (CLI)"
+  short_description: "Create/fund/claim/payout bounties via CLI"
+  default_prompt: "Use $gh-bounties-cli to create/fund a bounty and run claim/payout flows from the terminal."
+
+policy:
+  allow_implicit_invocation: true
