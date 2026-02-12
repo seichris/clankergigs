@@ -4,6 +4,7 @@ import { createPublicClient, fallback, http, isAddress, formatUnits, type Hex } 
 import { mainnet, sepolia } from "viem/chains";
 import { syncBountyLabels } from "../github/labels.js";
 import { postIssueCommentIfMissing } from "../github/comments.js";
+import { parseGithubIssueUrl } from "../github/parse.js";
 import type { GithubAuthConfig } from "../github/appAuth.js";
 
 type IndexerConfig = {
@@ -325,10 +326,20 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
         const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
         const issueUrl = bounty?.metadataURI;
         if (issueUrl) {
+          let ownerLogin: string | null = null;
+          try {
+            ownerLogin = parseGithubIssueUrl(issueUrl).owner;
+          } catch {
+            ownerLogin = null;
+          }
+
           const lines = [
             `🧾 Claim submitted (#${claimId})`,
             `Claimer: ${claimer}`,
-            metadataURI ? `Claim URL: ${metadataURI}` : null
+            metadataURI ? `Claim URL: ${metadataURI}` : null,
+            ownerLogin
+              ? `@${ownerLogin} please review and either authorize a payout to the claimer (if accepted) or process a refund (if not).`
+              : "Repo admins: please review and either authorize a payout to the claimer (if accepted) or process a refund (if not)."
           ].filter(Boolean) as string[];
           await postIssueCommentIfMissing({
             github: cfg.github ?? null,
