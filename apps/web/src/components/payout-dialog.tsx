@@ -239,7 +239,7 @@ export function PayoutDialog({
             <Label htmlFor="recipient">Recipient</Label>
             <Input
               id="recipient"
-              placeholder="0x... or alice.eth"
+              placeholder="0x... or name.eth"
               value={recipient}
               onChange={(event) => setRecipient(event.target.value)}
             />

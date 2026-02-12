@@ -61,7 +61,6 @@ export default function Home() {
   const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
   const mainnetWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET || "").trim();
   const sepoliaWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA || "").trim();
-  const suiWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_SUI || "").trim();
   const { address, hasProvider, connect } = useWallet();
   const { user, login, logout } = useGithubUser(apiUrl);
   const { theme, setTheme, mounted } = useTheme();
@@ -287,7 +286,7 @@ export default function Home() {
     return record.toLowerCase() === user.login.toLowerCase();
   }, [address, user, ensGithub]);
 
-  const hasNetworkSwitch = Boolean(mainnetWebOrigin || sepoliaWebOrigin || suiWebOrigin);
+  const hasNetworkSwitch = Boolean(mainnetWebOrigin || sepoliaWebOrigin);
 
   const switchNetwork = React.useCallback(
     (targetOrigin: string, preservePath = true) => {
@@ -327,12 +326,6 @@ export default function Home() {
                     <DropdownMenuItem disabled={chainId === 11155111} onClick={() => switchNetwork(sepoliaWebOrigin)}>
                       {chainLabel(11155111)}
                     </DropdownMenuItem>
-                  ) : null}
-                  {suiWebOrigin ? (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => switchNetwork(suiWebOrigin, false)}>Sui</DropdownMenuItem>
-                    </>
                   ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
