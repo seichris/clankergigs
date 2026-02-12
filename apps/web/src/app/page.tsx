@@ -15,8 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { FundIssueDialog } from "@/components/fund-issue-dialog";
 import { ClaimBountyDialog } from "@/components/claim-bounty-dialog";
-import { PayoutDialog } from "@/components/payout-dialog";
-import { AdminPayoutDialog } from "@/components/admin-payout-dialog";
+import { PayOutBountyDialog } from "@/components/pay-out-bounty-dialog";
 import { createIssueColumns } from "@/components/issues-table/columns";
 import { IssuesDataTable } from "@/components/issues-table/data-table";
 import type { IssueRow } from "@/components/issues-table/types";
@@ -75,13 +74,8 @@ export default function Home() {
   const [myFundingOnly, setMyFundingOnly] = React.useState(false);
   const [claimIssue, setClaimIssue] = React.useState<IssueRow | null>(null);
   const [claimOpen, setClaimOpen] = React.useState(false);
-  const [payoutIssue, setPayoutIssue] = React.useState<IssueRow | null>(null);
-  const [payoutOpen, setPayoutOpen] = React.useState(false);
-  const [payoutMode, setPayoutMode] = React.useState<"funder" | "dao">("funder");
-  const [adminPayoutIssue, setAdminPayoutIssue] = React.useState<IssueRow | null>(null);
-  const [adminPayoutOpen, setAdminPayoutOpen] = React.useState(false);
-  const [adminBountyIds, setAdminBountyIds] = React.useState<Set<string>>(new Set());
-  const [daoAddress, setDaoAddress] = React.useState<string | null>(null);
+  const [payOutIssue, setPayOutIssue] = React.useState<IssueRow | null>(null);
+  const [payOutOpen, setPayOutOpen] = React.useState(false);
 
   const fetchIssues = React.useCallback(async () => {
     setLoading(true);
@@ -105,63 +99,8 @@ export default function Home() {
   }, [fetchIssues]);
 
   React.useEffect(() => {
-    let active = true;
-    fetch(`${apiUrl}/contract`)
-      .then(async (res) => {
-        if (!res.ok) return null;
-        const json = (await res.json()) as { dao?: string };
-        return json?.dao ?? null;
-      })
-      .then((dao) => {
-        if (!active) return;
-        setDaoAddress(dao);
-      })
-      .catch(() => {
-        if (!active) return;
-        setDaoAddress(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [apiUrl]);
-
-  React.useEffect(() => {
     if (!address) setMyFundingOnly(false);
   }, [address]);
-
-  React.useEffect(() => {
-    if (!user || issues.length === 0) {
-      setAdminBountyIds(new Set());
-      return;
-    }
-    let active = true;
-    Promise.all(
-      issues.map((issue) =>
-        fetch(`${apiUrl}/github/admin?bountyId=${encodeURIComponent(issue.bountyId)}`, { credentials: "include" })
-          .then(async (res) => {
-            if (!res.ok) return false;
-            const json = (await res.json()) as { isAdmin?: boolean };
-            return Boolean(json?.isAdmin);
-          })
-          .catch(() => false)
-      )
-    )
-      .then((results) => {
-        if (!active) return;
-        const next = new Set<string>();
-        issues.forEach((issue, idx) => {
-          if (results[idx]) next.add(issue.bountyId);
-        });
-        setAdminBountyIds(next);
-      })
-      .catch(() => {
-        if (!active) return;
-        setAdminBountyIds(new Set());
-      });
-    return () => {
-      active = false;
-    };
-  }, [apiUrl, issues, user?.login]);
 
   const handleAddFunds = React.useCallback(
     (issue?: IssueRow) => {
@@ -187,30 +126,10 @@ export default function Home() {
     [address]
   );
 
-  const handlePayoutOpen = React.useCallback(
-    (issue: IssueRow, mode: "funder" | "dao") => {
-      if (!address) {
-        window.alert("Connect a wallet to submit payouts.");
-        return;
-      }
-      setPayoutIssue(issue);
-      setPayoutMode(mode);
-      setPayoutOpen(true);
-    },
-    [address]
-  );
-
-  const handleAdminPayoutOpen = React.useCallback(
-    (issue: IssueRow) => {
-      if (!address) {
-        window.alert("Connect a wallet to submit payouts.");
-        return;
-      }
-      setAdminPayoutIssue(issue);
-      setAdminPayoutOpen(true);
-    },
-    [address]
-  );
+  const handlePayOutBountyOpen = React.useCallback((issue: IssueRow) => {
+    setPayOutIssue(issue);
+    setPayOutOpen(true);
+  }, []);
 
   const filteredIssues = React.useMemo(() => {
     if (!myFundingOnly || !address) return issues;
@@ -247,15 +166,10 @@ export default function Home() {
       createIssueColumns({
         onAddFunds: (issue) => handleAddFunds(issue),
         onClaim: handleClaimOpen,
-        onPayout: handlePayoutOpen,
-        onAdminPayout: handleAdminPayoutOpen,
         showUsdc,
         ownersWithPayouts,
-        walletAddress: address,
-        adminBountyIds,
-        daoAddress,
       }),
-    [handleAddFunds, handleClaimOpen, handlePayoutOpen, handleAdminPayoutOpen, showUsdc, ownersWithPayouts, address, adminBountyIds, daoAddress]
+    [handleAddFunds, handleClaimOpen, showUsdc, ownersWithPayouts]
   );
 
   const handleDialogOpenChange = React.useCallback(
@@ -403,8 +317,7 @@ export default function Home() {
             githubUser={user}
             onAddIssue={() => handleAddFunds()}
             onClaim={handleClaimOpen}
-            onPayout={handlePayoutOpen}
-            onAdminPayout={handleAdminPayoutOpen}
+            onPayOutBounty={handlePayOutBountyOpen}
           />
         )}
       </div>
@@ -432,43 +345,26 @@ export default function Home() {
         onClaimed={() => fetchIssues()}
       />
 
-      <PayoutDialog
-        open={payoutOpen}
+      <PayOutBountyDialog
+        open={payOutOpen}
         onOpenChange={(next) => {
-          setPayoutOpen(next);
-          if (!next) setPayoutIssue(null);
+          setPayOutOpen(next);
+          if (!next) setPayOutIssue(null);
         }}
         walletAddress={address}
-        bountyId={payoutIssue?.bountyId ?? null}
-        issueUrl={payoutIssue?.issueUrl ?? null}
-        apiUrl={apiUrl}
-        mode={payoutMode}
-        escrowedByToken={
-          payoutIssue
-            ? payoutIssue.assets.reduce<Record<string, string>>((acc, asset) => {
-                acc[asset.token.toLowerCase()] = asset.escrowedWei;
-                return acc;
-              }, {})
-            : undefined
-        }
-        onPayouted={() => fetchIssues()}
-      />
-
-      <AdminPayoutDialog
-        open={adminPayoutOpen}
-        onOpenChange={(next) => {
-          setAdminPayoutOpen(next);
-          if (!next) setAdminPayoutIssue(null);
-        }}
-        walletAddress={address}
-        bountyId={adminPayoutIssue?.bountyId ?? null}
-        issueUrl={adminPayoutIssue?.issueUrl ?? null}
+        onWalletConnect={connect}
+        bountyId={payOutIssue?.bountyId ?? null}
+        issueUrl={payOutIssue?.issueUrl ?? null}
         apiUrl={apiUrl}
         githubUser={user}
         onGithubLogin={login}
+        isFunder={Boolean(
+          address &&
+            payOutIssue?.funders?.some((funder) => funder.toLowerCase() === address.toLowerCase())
+        )}
         escrowedByToken={
-          adminPayoutIssue
-            ? adminPayoutIssue.assets.reduce<Record<string, string>>((acc, asset) => {
+          payOutIssue
+            ? payOutIssue.assets.reduce<Record<string, string>>((acc, asset) => {
                 acc[asset.token.toLowerCase()] = asset.escrowedWei;
                 return acc;
               }, {})

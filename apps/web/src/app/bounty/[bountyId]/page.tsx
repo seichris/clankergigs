@@ -8,7 +8,12 @@ import { usdcAddressForChainId } from "@gh-bounties/shared";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FundIssueDialog } from "@/components/fund-issue-dialog";
+import { ClaimBountyDialog } from "@/components/claim-bounty-dialog";
+import { PayOutBountyDialog } from "@/components/pay-out-bounty-dialog";
 import { parseGithubIssueUrl } from "@/lib/gh";
+import { useGithubUser } from "@/lib/hooks/useGithubUser";
+import { useWallet } from "@/lib/hooks/useWallet";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -28,7 +33,7 @@ type BountyDetail = {
   createdAt: string;
   updatedAt: string;
   assets: BountyAsset[];
-  fundings: Array<{ txHash: string }>;
+  fundings: Array<{ txHash: string; funder?: string | null }>;
   claims: Array<{ claimId: number; metadataURI: string; txHash: string }>;
   payouts: Array<{ txHash: string }>;
   refunds: Array<{ txHash: string }>;
@@ -79,11 +84,17 @@ export default function BountyPage() {
     return raw || "";
   }, [params]);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
+  const { address, hasProvider, connect } = useWallet();
+  const { user, login, logout } = useGithubUser(apiUrl);
 
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [bounty, setBounty] = React.useState<BountyDetail | null>(null);
   const [githubIssue, setGithubIssue] = React.useState<GithubIssueSummary | null>(null);
+  const [fundOpen, setFundOpen] = React.useState(false);
+  const [claimOpen, setClaimOpen] = React.useState(false);
+  const [payOutOpen, setPayOutOpen] = React.useState(false);
+  const [refreshNonce, setRefreshNonce] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
@@ -108,9 +119,13 @@ export default function BountyPage() {
         const issueJson = (await issueRes.json()) as { issue?: GithubIssueSummary | null };
         if (!active) return;
         setGithubIssue(issueJson?.issue ?? null);
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!active) return;
-        setError(err?.message ?? "Failed to load bounty");
+        const msg =
+          typeof err === "object" && err !== null && "message" in err
+            ? String((err as { message?: unknown }).message || "Failed to load bounty")
+            : "Failed to load bounty";
+        setError(msg);
       } finally {
         if (!active) return;
         setLoading(false);
@@ -127,7 +142,7 @@ export default function BountyPage() {
     return () => {
       active = false;
     };
-  }, [apiUrl, bountyId]);
+  }, [apiUrl, bountyId, refreshNonce]);
 
   const parsedIssue = React.useMemo(() => {
     if (!bounty?.metadataURI) return null;
@@ -138,14 +153,58 @@ export default function BountyPage() {
     }
   }, [bounty?.metadataURI]);
 
+  const isRepoOwner = Boolean(
+    parsedIssue?.owner &&
+      user &&
+      parsedIssue.owner.toLowerCase() === user.login.toLowerCase()
+  );
+
+  const isFunder = Boolean(
+    address &&
+      bounty?.fundings?.some((f) => f.funder && f.funder.toLowerCase() === address.toLowerCase())
+  );
+
+  const escrowedByToken = React.useMemo(() => {
+    if (!bounty) return undefined;
+    return bounty.assets.reduce<Record<string, string>>((acc, asset) => {
+      acc[asset.token.toLowerCase()] = asset.escrowed;
+      return acc;
+    }, {});
+  }, [bounty]);
+
   return (
     <main className="min-h-screen">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-6">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <Button asChild variant="outline" size="sm">
             <Link href="/">Back to all bounties</Link>
           </Button>
-          <span className="font-mono text-xs text-muted-foreground">{bountyId || "-"}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {!address ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => connect().catch((err) => window.alert(err?.message ?? String(err)))}
+                disabled={!hasProvider}
+              >
+                {hasProvider ? "Connect wallet" : "No wallet detected"}
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(address)}>
+                {address.slice(0, 6)}…{address.slice(-4)}
+              </Button>
+            )}
+            {!user ? (
+              <Button variant="outline" size="sm" onClick={() => login()}>
+                Connect GitHub
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => logout()}>
+                GitHub: @{user.login}
+              </Button>
+            )}
+            <span className="font-mono text-xs text-muted-foreground">{bountyId || "-"}</span>
+          </div>
         </div>
 
         {loading ? <div className="rounded-md border bg-card p-6 text-sm text-muted-foreground">Loading bounty…</div> : null}
@@ -211,7 +270,81 @@ export default function BountyPage() {
             </div>
           </section>
         ) : null}
+
+        {bounty ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              onClick={() => {
+                if (!address) {
+                  window.alert("Connect a wallet to fund this bounty.");
+                  return;
+                }
+                setFundOpen(true);
+              }}
+            >
+              Fund bounty
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!address) {
+                  window.alert("Connect a wallet to submit a claim.");
+                  return;
+                }
+                setClaimOpen(true);
+              }}
+            >
+              Submit claim
+            </Button>
+            {isRepoOwner ? (
+              <Button variant="secondary" onClick={() => setPayOutOpen(true)}>
+                Pay out bounty
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
+
+      <FundIssueDialog
+        open={fundOpen}
+        onOpenChange={(next) => {
+          if (next && !address) return;
+          setFundOpen(next);
+        }}
+        walletAddress={address}
+        defaultIssueUrl={bounty?.metadataURI ?? null}
+        onFunded={() => {
+          setFundOpen(false);
+          setRefreshNonce((n) => n + 1);
+        }}
+      />
+
+      <ClaimBountyDialog
+        open={claimOpen}
+        onOpenChange={(next) => setClaimOpen(next)}
+        walletAddress={address}
+        bountyId={bounty?.bountyId ?? null}
+        issueUrl={bounty?.metadataURI ?? null}
+        apiUrl={apiUrl}
+        githubUser={user}
+        onGithubLogin={login}
+        onClaimed={() => setRefreshNonce((n) => n + 1)}
+      />
+
+      <PayOutBountyDialog
+        open={payOutOpen}
+        onOpenChange={setPayOutOpen}
+        walletAddress={address}
+        onWalletConnect={connect}
+        githubUser={user}
+        onGithubLogin={login}
+        bountyId={bounty?.bountyId ?? null}
+        issueUrl={bounty?.metadataURI ?? null}
+        apiUrl={apiUrl}
+        escrowedByToken={escrowedByToken}
+        isFunder={isFunder}
+        onPayouted={() => setRefreshNonce((n) => n + 1)}
+      />
     </main>
   );
 }

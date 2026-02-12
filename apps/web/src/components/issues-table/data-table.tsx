@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { Share2 } from "lucide-react";
 import {
   flexRender,
   getCoreRowModel,
@@ -63,16 +64,16 @@ function ExpandedIssueRow({
   issue,
   showUsdc,
   walletAddress,
+  githubUser,
   onClaim,
-  onPayout,
-  onAdminPayout,
+  onPayOutBounty,
 }: {
   issue: IssueRow;
   showUsdc: boolean;
   walletAddress: Address | null;
+  githubUser: GithubUser | null;
   onClaim: (issue: IssueRow) => void;
-  onPayout: (issue: IssueRow, mode: "funder" | "dao") => void;
-  onAdminPayout: (issue: IssueRow) => void;
+  onPayOutBounty: (issue: IssueRow) => void;
 }) {
   const usdc = usdcAddressForChainId(issue.chainId);
   const assets = showUsdc || !usdc
@@ -89,6 +90,11 @@ function ExpandedIssueRow({
   const endDate = timeline ? new Date(timeline.endDate) : new Date();
   const days = timeline?.days ?? [];
   const linkedPrs = issue.linkedPullRequests ?? [];
+  const isRepoOwner = Boolean(
+    issue.owner &&
+      githubUser &&
+      issue.owner.toLowerCase() === githubUser.login.toLowerCase()
+  );
 
   function formatDate(date: Date) {
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -142,6 +148,7 @@ function ExpandedIssueRow({
   function sortedDayEvents(day: ActivityDay) {
     return [...day.events].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }
+
   return (
     <div className="grid gap-4 rounded-md bg-muted/40 p-4 text-sm">
       <div className="flex flex-wrap items-center gap-3">
@@ -153,6 +160,14 @@ function ExpandedIssueRow({
             {issue.bountyId}
           </Link>
         </span>
+        <Link
+          href={`/bounty/${issue.bountyId}`}
+          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          data-no-row-toggle
+        >
+          <Share2 className="h-3.5 w-3.5" />
+          share bounty
+        </Link>
       </div>
       <div className="grid gap-2 md:grid-cols-2">
         <div className="space-y-2">
@@ -280,20 +295,17 @@ function ExpandedIssueRow({
         </div>
         <div className="space-y-2 md:col-span-2">
           <div className="text-xs uppercase text-muted-foreground">Payouts</div>
-          {walletAddress ? (
+          {isRepoOwner ? (
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" onClick={() => onAdminPayout(issue)}>
-                Admin payout
+              <Button size="sm" variant="secondary" onClick={() => onPayOutBounty(issue)}>
+                Pay out bounty
               </Button>
-              <Button variant="outline" size="sm" onClick={() => onPayout(issue, "funder")}>
-                Funder payout
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => onPayout(issue, "dao")}>
-                DAO payout
-              </Button>
+              {!walletAddress ? (
+                <span className="text-xs text-muted-foreground">Connect a wallet to submit payouts.</span>
+              ) : null}
             </div>
           ) : (
-            <div className="text-xs text-muted-foreground">Connect a wallet to submit payouts.</div>
+            <div className="text-xs text-muted-foreground">Payouts are available to the repo owner.</div>
           )}
         </div>
       </div>
@@ -311,8 +323,7 @@ export function IssuesDataTable({
   githubUser,
   onAddIssue,
   onClaim,
-  onPayout,
-  onAdminPayout,
+  onPayOutBounty,
 }: {
   columns: ColumnDef<IssueRow>[];
   data: IssueRow[];
@@ -323,8 +334,7 @@ export function IssuesDataTable({
   githubUser: GithubUser | null;
   onAddIssue: () => void;
   onClaim: (issue: IssueRow) => void;
-  onPayout: (issue: IssueRow, mode: "funder" | "dao") => void;
-  onAdminPayout: (issue: IssueRow) => void;
+  onPayOutBounty: (issue: IssueRow) => void;
 }) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -432,9 +442,9 @@ export function IssuesDataTable({
                           issue={row.original}
                           showUsdc={showUsdc}
                           walletAddress={walletAddress}
+                          githubUser={githubUser}
                           onClaim={onClaim}
-                          onPayout={onPayout}
-                          onAdminPayout={onAdminPayout}
+                          onPayOutBounty={onPayOutBounty}
                         />
                       </TableCell>
                     </TableRow>

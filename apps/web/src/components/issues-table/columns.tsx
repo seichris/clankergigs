@@ -1,7 +1,6 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import Link from "next/link";
 import { formatUnits } from "viem";
 import { ArrowUpDown, ExternalLink } from "lucide-react";
 
@@ -12,13 +11,6 @@ import { usdcAddressForChainId } from "@gh-bounties/shared";
 import type { GithubIssueLabel, IssueRow, UnlockSchedule } from "./types";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
-function shortHex(value: string | null | undefined, chars = 6) {
-  if (!value) return "-";
-  if (value.length <= chars * 2 + 2) return value;
-  return `${value.slice(0, chars + 2)}…${value.slice(-chars)}`;
-}
 
 function labelTextColor(hex: string) {
   const sanitized = hex.replace("#", "");
@@ -155,16 +147,10 @@ function statusVariant(status: string) {
 export function createIssueColumns(options: {
   onAddFunds: (issue: IssueRow) => void;
   onClaim: (issue: IssueRow) => void;
-  onPayout: (issue: IssueRow, mode: "funder" | "dao") => void;
-  onAdminPayout: (issue: IssueRow) => void;
   showUsdc: boolean;
   ownersWithPayouts: Set<string>;
-  walletAddress?: string | null;
-  adminBountyIds?: Set<string>;
-  daoAddress?: string | null;
 })
   : ColumnDef<IssueRow>[] {
-  const adminBountyIds = options.adminBountyIds ?? new Set<string>();
   return [
     {
       accessorKey: "issueUrl",
@@ -185,9 +171,6 @@ export function createIssueColumns(options: {
                 {title}
               </a>
               <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
-              <Link href={`/bounty/${issue.bountyId}`} className="text-xs text-primary hover:underline">
-                Open bounty
-              </Link>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>
@@ -319,17 +302,6 @@ export function createIssueColumns(options: {
       header: "",
       cell: ({ row }) => {
         const issue = row.original;
-        const wallet = options.walletAddress?.toLowerCase() || "";
-        const isRepoAdmin = adminBountyIds.has(issue.bountyId);
-        const isFunder = Boolean(
-          wallet && issue.funders?.some((funder) => funder.toLowerCase() === wallet)
-        );
-        const daoAddress = options.daoAddress?.toLowerCase() || "";
-        const isDao = Boolean(
-          wallet && daoAddress && daoAddress !== ZERO_ADDRESS && wallet === daoAddress
-        );
-        const canPayout = isRepoAdmin || isFunder || isDao;
-
         return (
           <div className="flex flex-col gap-2">
             <Button size="sm" onClick={() => options.onAddFunds(issue)}>
@@ -338,23 +310,6 @@ export function createIssueColumns(options: {
             <Button size="sm" variant="outline" onClick={() => options.onClaim(issue)}>
               Submit claim
             </Button>
-            {canPayout ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  if (isRepoAdmin) {
-                    options.onAdminPayout(issue);
-                  } else if (isDao) {
-                    options.onPayout(issue, "dao");
-                  } else {
-                    options.onPayout(issue, "funder");
-                  }
-                }}
-              >
-                Pay out bounty
-              </Button>
-            ) : null}
           </div>
         );
       },
