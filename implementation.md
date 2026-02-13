@@ -1,116 +1,115 @@
-# Issue #22 Implementation Plan: Serverless claim/payout via zkTLS proofs
+# Issue #22 Implementation Plan: Serverless bounty authorization via zkTLS proofs
 
-## Goal
-Deliver a serverless path for bounty operations by replacing backend signer dependency for claim and optionally payout/refund flows with on-chain verifiable zkTLS proofs of GitHub state. Maintain the existing backend-authorized path as a fallback.
+## Objective
+Implement issue [#22](https://github.com/seichris/clankergigs/issues/22) by replacing backend-signed claim/payout/refund authorization with optional zkTLS-backed authorization while preserving legacy API-signed flow.
 
-## Scope
-- Bounty system: `seichris/clankergigs` monorepo
-- Issue to solve: `#22` in this repo
-- Targets:
-  - Serverless claim submission (must-have)
-  - Optional serverless payout and refund authorization (phase 2)
+## Non-goals for this stage
+- Removing existing `/claim-auth`, `/payout-auth`, `/refund-auth` endpoints.
+- Removing current funder-only fallback functions (`funderPayout`, `withdrawAfterTimeout`).
 
-## Current behavior to change
-- Claim/payout authorization currently relies on API-generated EIP-712 signatures (`POST /claim-auth`, `/payout-auth`, `/refund-auth`).
-- Contract side (`GHBounties.sol`) requires signatures and checks with `ECDSA`/replay-protected nonces in `_verifyClaimAuth`, `_verifyPayoutAuth`, `_verifyRefundAuth`.
+## Success criteria
+- PR authors can claim a bounty without API signature dependency via `submitClaimWithZkTls`.
+- Repo admins can authorize payouts/refunds via API-independent evidence when they choose.
+- All old flows remain available as fallback.
+- Contract and API reject replay and repo mismatch attempts.
 
-## Proposed design
+## Work plan
 
-### 1) Identity binding registry (on-chain)
-Add a new immutable proof-friendly identity registry:
-- `githubLoginBindingRoot[keccak256(login)] -> boundAddress` (or equivalent mapping with nonce/expiry)
-- `login -> account owner key` can be updated by owner-controlled rotation flow (challenge+rebind)
-- Binding must include:
-  - GitHub login
-  - target chain id and contract address
-  - binding nonce
-  - expiry timestamp
-  - account address
-- Signature/claim checks must enforce `msg.sender == boundAddress(bindingRoot)`.
+### 1) Contract: introduce verifier abstraction and proof replay guards
+File: `contracts/src/GHBounties.sol`
 
-### 2) Verifier abstraction
-Create a pluggable on-chain verifier interface:
-- `IVerifier` interface for proof + publicSignals verification
-- Contract stores verifier per action (claim/payout/refund)
-- Initially support one provider (Reclaim / Primus / BringID) behind a versioned verifier contract
-- Action-specific proof domain to prevent replay across chains/apps:
-  - `actionId = keccak256("ghb-claim-v1" || chainId || contract || bountyId || actor || claimUri)`
+- Add verifier interfaces and configurable verifier storage:
+  - `IVerifier` interface with proof verification.
+  - `claimZkTlsVerifier`, `payoutZkTlsVerifier`, `refundZkTlsVerifier` addresses.
+- Add typed nonces/nullifiers for on-chain proofs:
+  - e.g., `mapping(bytes32 => bool) proofUsed;` keyed by `keccak256(action, bountyId, token, actor, target, amountWei, uri, nonce)`.
+- Add action-specific payload hashes:
+  - `claimHash = keccak256(abi.encodePacked("ghb-claim-v1", chainId, address(this), bountyId, claimer, claimMetadataURI, deadline, nonce))`
+  - `payoutHash` and `refundHash` similarly include exact tuple fields.
+- Add governance setter functions for verifier addresses and pause toggles where needed.
+- Add `bytes32` domain separators or explicit `actionId` strings to prevent cross-contract cross-chain replay.
 
-### 3) Claim flow v2 (`submitClaimWithZkTLSProof`)
-- New user entrypoint in escrow:
-  - `submitClaimWithZkTLSProof(bountyId, claimMetadataURI, proof, publicSignals, claimData)`
-- Requirements enforced on-chain:
-  - PR URL points to same repo as bounty metadata URI
-  - PR author login resolves to bound address that matches `msg.sender`
-  - nonce/hash binds to `bountyId + msg.sender + claimMetadataURI`
-  - one-time claim per claimer/bounty via a replay key/bitmap or existing claim record
-- Reuse existing payout gating rules (e.g. only first claimer wins, bounty lock/state checks).
+### 2) Contract: add zkTLS claim path
+File: `contracts/src/GHBounties.sol`
 
-### 4) Optional payout/refund flow v2
-- Two approaches:
-  1. Admin-proof payout/refund:
-     - Proof from GitHub admin action (comment command / workflow approval artifact)
-     - verifies `repo-admin(login)` and exact `(bountyId, token, recipient/funder, amount)` tuple
-     - optional nullifier to prevent replay
-  2. Fallback to existing backend DAO/authorizer path
-- Keep old signer paths in place to avoid breaking existing clients.
+- Add external function:
+  - `submitClaimWithZkTLS(uint256 bountyId, string calldata claimMetadataURI, uint256 nonce, uint256 deadline, bytes calldata proof, bytes32[] calldata publicSignals)`
+- Validation steps:
+  - enforce `block.timestamp <= deadline`.
+  - verify bounty is claimable and not already claimed.
+  - validate proof against verifier and action payload.
+  - parse/validate issue/PR repo binding between bounty metadata and PR URL.
+  - enforce repo path consistency and proof nonce consumption.
+- Mark proof/hash as consumed and store claim record.
+- Call existing payout state transitions (so payouts can use old or new auth path).
 
-### 5) Client/CLI flow
-- Add `proof` mode to `apps/web` and/or agent scripts:
-  - `ghb` CLI path for generating proof artifacts
-  - PR authoring and payout admin flow remains in repo issue/PR UX where possible
-- PR-authoring path in docs:
-  - fork → bind GitHub login to wallet once → open PR with required URL → generate proof → call new contract method.
+### 3) Contract: optional admin payout/refund zkTLS paths
+File: `contracts/src/GHBounties.sol`
 
-## Contract changes (high level)
-- `contracts/src/GHBounties.sol`
-  - Add storage for `githubLoginBindingRoot` + optional verifier addresses
-  - Add one-time/nullifier tracking for zkTLS claims
-  - Add new claim entrypoint and verifier call
-  - Keep existing `_verifyClaimAuth` + `submitClaimWithAuthorization` unchanged
-  - Add governance/admin controls for verifier upgrades and pause behavior
+- Add external functions:
+  - `submitPayoutWithZkTLS(...)`
+  - `submitRefundWithZkTLS(...)`
+- Shared validation:
+  - proof must authenticate `repoAdmin` role and tuple fields (`bountyId`, `token`, recipient/funder, amountWei, deadline, nonce).
+  - enforce one-time proof/nullifier consumption.
+  - preserve existing `payoutWithAuthorization`/`refundWithAuthorization` behavior as fallback.
 
-## API changes (high level)
+### 4) Shared utilities: canonical GitHub URI parsing
+Files:
+- `contracts/src/GHBounties.sol` (or helper library if needed)
+- `packages/shared/src/index.ts`
+
+- Export consistent canonicalization for issue/PR URLs:
+  - normalizing `https://github.com/<owner>/<repo>/...`
+  - extracting `<owner>`, `<repo>`, and PR number in canonical string form.
+- Ensure on-chain and off-chain checks use the same canonical representation.
+
+### 5) API: keep existing endpoints and add capability metadata
+Files:
 - `apps/api/src/index.ts`
-  - Maintain legacy endpoints for compatibility
-  - Optionally add helper endpoint returning signed statement templates and verification params (chainId, contract, bountyId action digest)
-  - Avoid being in critical claim path for new `v2` mode
+- `apps/api/src/indexer/github/*` as needed
 
-## Security hardening
-- Replay resistance:
-  - Proof statements must include chain, contract, bountyId, claim URI, and claimant
-  - Enforce one-time consumption by on-chain marker
-- Data integrity:
-  - Canonicalize repository + PR URI parsing
-  - Reject non-match repo mismatch
-  - Require proof freshness windows when provider supports timestamps
-- Binding safety:
-  - one binding per login by default, rotate with delay or explicit revoke semantics
-  - optional proof that binding statement was hosted at controlled GitHub surface
-- Upgrade safety:
-  - verifier changes behind owner/admin governance with timelock on critical path if feasible
+- Leave API endpoints in place for backward compatibility.
+- Add optional helper endpoint (v2 metadata)
+  - returns digest fields needed by clients before proof submission if useful.
+  - no signer is required for zkTLS submit paths.
 
-## Phased rollout
-1. Phase A (claim first): add bindings + claim zkTLS verifier + dual-path contract support.
-2. Phase B: add payout/refund zkTLS proof routes with strict tuple/amount checks.
-3. Phase C: add UI/agent UX for proof generation and submission.
-4. Phase D: on-chain tests and fuzzing, gas benchmarking, documentation, deployment notes.
+### 6) Frontend: add proof submission path
+Files:
+- `apps/web/src/**/*`
+- `apps/web-sui/src/**/*` (if scope expanded)
 
-## Acceptance mapping
-- Claim without `/claim-auth`: covered by new `submitClaimWithZkTLSProof`.
-- Correct author enforcement: bound GitHub login + PR author proof + msg.sender match.
-- Replay resistance: proof/action tuple binding + consumed marker.
-- Negative coverage:
-  - non-author claim attempt fails at bound-address check
-  - repo mismatch fails URI/repo binding checks
-  - PR mismatch fails proof tuple check
-- Backward compatibility: old API-signed path remains for existing clients.
+- Add a claim action button/flow that can use zkTLS mode.
+- Add payout/refund admin path controls behind feature flag.
+- Show verifier status and proof nonce/deadline UX warnings.
 
-## Files touched (initial)
-- `contracts/src/GHBounties.sol`
-- `apps/api/src/index.ts`
-- `apps/web` or agent tooling (new zkTLS UX path)
-- New docs in `implementation.md`
+### 7) Agent scripts and docs
+Files:
+- `scripts-for-ai-agents/`
+- `README.md`
+- `implementation.md`
 
-## Why this is correct for issue #22
-It removes backend critical dependency for claims while preserving existing fallback flows and introduces explicit zkTLS proof semantics so GitHub identity and approval evidence are verified cryptographically instead of by a hot API signer.
+- Add scripts for submitting proof payloads once generated.
+- Document endpoint and contract method changes for mainnet and Sepolia.
+- Add operational notes for key rotation and emergency fallback to legacy API flow.
+
+## Acceptance test checklist
+
+- Unit/integration tests for:
+  - proof replay rejection
+  - repo mismatch rejection
+  - expired proof rejection
+  - successful claim via zkTLS without API signature
+  - successful payout/refund via zkTLS
+  - old API-signed claim/payout/refund still accepted
+- Indexing/CLI path still supports legacy `--claim-auth` and new zkTLS helper output.
+
+## Deployment/migration plan
+
+- Deploy contract upgrade behind governance (if upgradeable proxy) or coordinated release if immutable.
+- Keep legacy env vars and APIs untouched in the release.
+- Monitor failed proof events and provide fallback switch if external verifier unavailable.
+
+## Why this satisfies issue #22
+
+It enables a backend-independent claim and admin authorization path with explicit cryptographic proof of GitHub state, while preserving existing API-signer functionality as a safety fallback.
