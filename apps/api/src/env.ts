@@ -56,6 +56,11 @@ const EnvSchema = z.object({
   GITHUB_TOKEN: z.string().optional().or(z.literal("")),
   GITHUB_BACKFILL_INTERVAL_MINUTES: z.coerce.number().int().min(0).default(60),
   INDEXER_BACKFILL_BLOCK_CHUNK: z.coerce.number().int().min(1).default(10),
+  // Optional: force the initial indexer backfill start block when no indexer state exists.
+  // Useful when resetting/wiping the DB; avoids the dev default of head-2000.
+  INDEXER_START_BLOCK: z
+    .preprocess((value) => (value === "" || value == null ? undefined : value), z.coerce.number().int().min(0))
+    .optional(),
   GITHUB_AUTH_MODE: z
     .preprocess(
       (value) => (typeof value === "string" ? value.toLowerCase() : value),
