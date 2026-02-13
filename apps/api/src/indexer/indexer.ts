@@ -13,6 +13,7 @@ type IndexerConfig = {
   contractAddress: Hex;
   github?: GithubAuthConfig | null;
   backfillBlockChunk?: number;
+  startBlock?: number;
 };
 
 type PublicClient = ReturnType<typeof createPublicClient>;
@@ -114,12 +115,26 @@ export async function startIndexer(cfg: IndexerConfig) {
     transport,
   });
 
+  // Sanity checks to prevent "cross-chain pollution" when CHAIN_ID / RPC_URL are misconfigured.
+  // Without this, the indexer can store Sepolia events under chainId=1 (or vice-versa) and the UI will show incorrect totals.
+  const actualChainId = await client.getChainId();
+  if (actualChainId !== cfg.chainId) {
+    throw new Error(`Indexer chainId mismatch: env CHAIN_ID=${cfg.chainId} but RPC reports chainId=${actualChainId}`);
+  }
+  const code = await client.getBytecode({ address: contractAddress });
+  if (!code || code === "0x") {
+    throw new Error(`Indexer contract not found: no code at ${contractAddress} on chainId=${cfg.chainId}`);
+  }
+
   // Backfill from last indexed block (or from current head - 2k as a safe-ish dev default).
   const head = await client.getBlockNumber();
   const state = await prisma.indexerState.findUnique({
     where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress } }
   });
-  const fromBlock = BigInt(state?.lastBlock ?? Math.max(0, Number(head) - 2000));
+  const defaultFrom = BigInt(Math.max(0, Number(head) - 2000));
+  const startFrom = typeof cfg.startBlock === "number" && Number.isFinite(cfg.startBlock) ? BigInt(cfg.startBlock) : null;
+  let fromBlock = BigInt(state?.lastBlock ?? (startFrom ?? defaultFrom));
+  if (fromBlock > head) fromBlock = head;
 
   await backfill(client, { ...cfg, contractAddress }, fromBlock, head);
 

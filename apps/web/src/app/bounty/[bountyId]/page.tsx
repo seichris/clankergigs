@@ -3,6 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import type { Address, Hex } from "viem";
 import { formatUnits } from "viem";
 import { usdcAddressForChainId } from "@gh-bounties/shared";
 
@@ -11,9 +12,11 @@ import { Button } from "@/components/ui/button";
 import { FundIssueDialog } from "@/components/fund-issue-dialog";
 import { ClaimBountyDialog } from "@/components/claim-bounty-dialog";
 import { PayOutBountyDialog } from "@/components/pay-out-bounty-dialog";
+import { ghBountiesAbi } from "@/lib/abi";
 import { parseGithubIssueUrl } from "@/lib/gh";
 import { useGithubUser } from "@/lib/hooks/useGithubUser";
 import { useWallet } from "@/lib/hooks/useWallet";
+import { getConfig, getPublicClient } from "@/lib/wallet";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -164,13 +167,56 @@ export default function BountyPage() {
       bounty?.fundings?.some((f) => f.funder && f.funder.toLowerCase() === address.toLowerCase())
   );
 
+  const [onchainTotalsByToken, setOnchainTotalsByToken] = React.useState<
+    Record<string, { escrowed: string; funded: string; paid: string }> | null
+  >(null);
+
+  React.useEffect(() => {
+    if (!bountyId) return;
+    if (!bounty) return;
+    if (bounty.assets.length === 0) return;
+
+    let active = true;
+    const pc = getPublicClient();
+    const { contractAddress } = getConfig();
+    const tokens = bounty.assets.map((a) => a.token.toLowerCase());
+
+    (async () => {
+      try {
+        const rows = await Promise.all(
+          tokens.map(async (token) => {
+            const res = (await pc.readContract({
+              address: contractAddress,
+              abi: ghBountiesAbi,
+              functionName: "getTotals",
+              args: [bountyId as Hex, token as Address],
+            })) as readonly [bigint, bigint, bigint];
+            return { token, escrowed: res[0].toString(), funded: res[1].toString(), paid: res[2].toString() };
+          })
+        );
+        if (!active) return;
+        const map: Record<string, { escrowed: string; funded: string; paid: string }> = {};
+        for (const r of rows) map[r.token] = { escrowed: r.escrowed, funded: r.funded, paid: r.paid };
+        setOnchainTotalsByToken(map);
+      } catch {
+        if (!active) return;
+        setOnchainTotalsByToken(null);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [bountyId, bounty]);
+
   const escrowedByToken = React.useMemo(() => {
     if (!bounty) return undefined;
     return bounty.assets.reduce<Record<string, string>>((acc, asset) => {
-      acc[asset.token.toLowerCase()] = asset.escrowed;
+      const key = asset.token.toLowerCase();
+      acc[key] = onchainTotalsByToken?.[key]?.escrowed ?? asset.escrowed;
       return acc;
     }, {});
-  }, [bounty]);
+  }, [bounty, onchainTotalsByToken]);
 
   return (
     <main className="min-h-screen">
@@ -244,14 +290,24 @@ export default function BountyPage() {
               <div className="text-xs uppercase text-muted-foreground">Assets</div>
               {bounty.assets.length > 0 ? (
                 <div className="grid gap-2 text-sm">
+                  {onchainTotalsByToken ? (
+                    <div className="rounded border bg-muted/30 p-2 text-xs text-muted-foreground">
+                      Showing on-chain totals (indexed totals may be stale).
+                    </div>
+                  ) : null}
                   {bounty.assets.map((asset) => {
                     const meta = tokenMeta(asset.token, bounty.chainId);
+                    const key = asset.token.toLowerCase();
+                    const totals = onchainTotalsByToken?.[key];
+                    const funded = totals?.funded ?? asset.funded;
+                    const escrowed = totals?.escrowed ?? asset.escrowed;
+                    const paid = totals?.paid ?? asset.paid;
                     return (
                       <div key={asset.token} className="rounded border bg-muted/40 p-3">
                         <div className="font-medium">{meta.symbol}</div>
-                        <div className="text-xs text-muted-foreground">Funded: {formatTokenAmount(asset.funded, meta.decimals)}</div>
-                        <div className="text-xs text-muted-foreground">In active bounty: {formatTokenAmount(asset.escrowed, meta.decimals)}</div>
-                        <div className="text-xs text-muted-foreground">Paid: {formatTokenAmount(asset.paid, meta.decimals)}</div>
+                        <div className="text-xs text-muted-foreground">Funded: {formatTokenAmount(funded, meta.decimals)}</div>
+                        <div className="text-xs text-muted-foreground">In active bounty: {formatTokenAmount(escrowed, meta.decimals)}</div>
+                        <div className="text-xs text-muted-foreground">Paid: {formatTokenAmount(paid, meta.decimals)}</div>
                       </div>
                     );
                   })}

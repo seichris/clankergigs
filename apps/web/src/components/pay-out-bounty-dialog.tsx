@@ -75,15 +75,25 @@ export function PayOutBountyDialog({
   const [autoAmount, setAutoAmount] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [onchainTotalsByToken, setOnchainTotalsByToken] = React.useState<Record<string, { escrowed: string; funded: string; paid: string }> | null>(
+    null
+  );
+  const [onchainContributionByToken, setOnchainContributionByToken] = React.useState<Record<string, { amount: string; lockedUntil: number }> | null>(
+    null
+  );
 
   const escrowedEth = escrowedByToken?.[ETH_ADDRESS.toLowerCase()] || "0";
   const escrowedUsdc = usdcAddress ? escrowedByToken?.[usdcAddress.toLowerCase()] || "0" : "0";
 
+  // Prefer on-chain totals (source of truth) when available; fall back to indexed DB totals.
+  const escrowedEthEffective = onchainTotalsByToken?.[ETH_ADDRESS.toLowerCase()]?.escrowed ?? escrowedEth;
+  const escrowedUsdcEffective = usdcAddress ? (onchainTotalsByToken?.[usdcAddress.toLowerCase()]?.escrowed ?? escrowedUsdc) : "0";
+
   const maxForRepoAsset = React.useMemo(() => {
-    if (repoAsset === "ETH") return { raw: escrowedEth, decimals: 18 };
-    if (repoAsset === "USDC") return { raw: escrowedUsdc, decimals: 6 };
+    if (repoAsset === "ETH") return { raw: escrowedEthEffective, decimals: 18 };
+    if (repoAsset === "USDC") return { raw: escrowedUsdcEffective, decimals: 6 };
     return { raw: "0", decimals: 6 };
-  }, [repoAsset, escrowedEth, escrowedUsdc]);
+  }, [repoAsset, escrowedEthEffective, escrowedUsdcEffective]);
 
   const maxRepoDisplay = React.useMemo(() => {
     try {
@@ -102,7 +112,70 @@ export function PayOutBountyDialog({
     setAmount("");
     setAutoAmount(true);
     setError(null);
+    setOnchainTotalsByToken(null);
+    setOnchainContributionByToken(null);
   }, [open, walletAddress]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    if (!bountyId) return;
+
+    let active = true;
+    const { contractAddress } = getConfig();
+    const pc = getPublicClient();
+
+    const tokens = [ETH_ADDRESS.toLowerCase(), usdcAddress?.toLowerCase()].filter(Boolean) as string[];
+
+    (async () => {
+      try {
+        const totals = await Promise.all(
+          tokens.map(async (t) => {
+            const res = (await pc.readContract({
+              address: contractAddress,
+              abi: ghBountiesAbi,
+              functionName: "getTotals",
+              args: [bountyId as Hex, t as Address],
+            })) as readonly [bigint, bigint, bigint];
+            return { token: t, escrowed: res[0].toString(), funded: res[1].toString(), paid: res[2].toString() };
+          })
+        );
+        if (!active) return;
+        const map: Record<string, { escrowed: string; funded: string; paid: string }> = {};
+        for (const t of totals) map[t.token] = { escrowed: t.escrowed, funded: t.funded, paid: t.paid };
+        setOnchainTotalsByToken(map);
+      } catch {
+        // Best-effort: keep UI functional even if RPC is temporarily unavailable.
+        if (!active) return;
+        setOnchainTotalsByToken(null);
+      }
+
+      if (!walletAddress) return;
+      try {
+        const contributions = await Promise.all(
+          tokens.map(async (t) => {
+            const res = (await pc.readContract({
+              address: contractAddress,
+              abi: ghBountiesAbi,
+              functionName: "getContribution",
+              args: [bountyId as Hex, t as Address, walletAddress],
+            })) as readonly [bigint, bigint];
+            return { token: t, amount: res[0].toString(), lockedUntil: Number(res[1] ?? 0n) };
+          })
+        );
+        if (!active) return;
+        const map: Record<string, { amount: string; lockedUntil: number }> = {};
+        for (const c of contributions) map[c.token] = { amount: c.amount, lockedUntil: c.lockedUntil };
+        setOnchainContributionByToken(map);
+      } catch {
+        if (!active) return;
+        setOnchainContributionByToken(null);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [open, bountyId, walletAddress, usdcAddress]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -114,6 +187,17 @@ export function PayOutBountyDialog({
     if (!autoAmount) return;
     setAmount(maxRepoDisplay);
   }, [open, mode, repoAsset, maxRepoDisplay, autoAmount]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    // Avoid carrying an auto-filled repo payout amount into funder payout mode.
+    if (mode === "funder") {
+      setAutoAmount(false);
+      setAmount("");
+    } else {
+      setAutoAmount(true);
+    }
+  }, [open, mode]);
 
   const canSubmitRepo = Boolean(walletAddress && bountyId && isAddress(recipient.trim()) && githubUser);
   const canSubmitFunder = Boolean(walletAddress && bountyId && isAddress(recipient.trim()) && amount && Number(amount) > 0 && isFunder);
@@ -215,7 +299,7 @@ export function PayOutBountyDialog({
       if (mode === "repo") {
         let didSubmit = false;
         if (repoAsset === "ALL" || repoAsset === "ETH") {
-          const amountWei = repoAsset === "ALL" ? BigInt(escrowedEth || "0") : parseEther(amount);
+          const amountWei = repoAsset === "ALL" ? BigInt(escrowedEthEffective || "0") : parseEther(amount);
           if (amountWei > 0n) {
             await submitRepoPayout({ token: ETH_ADDRESS, amountWei });
             didSubmit = true;
@@ -223,7 +307,7 @@ export function PayOutBountyDialog({
         }
         if (repoAsset === "ALL" || repoAsset === "USDC") {
           if (!usdcAddress) throw new Error("USDC is not configured for this chain.");
-          const amountWei = repoAsset === "ALL" ? BigInt(escrowedUsdc || "0") : parseUnits(amount, 6);
+          const amountWei = repoAsset === "ALL" ? BigInt(escrowedUsdcEffective || "0") : parseUnits(amount, 6);
           if (amountWei > 0n) {
             await submitRepoPayout({ token: usdcAddress as Address, amountWei });
             didSubmit = true;
@@ -234,6 +318,26 @@ export function PayOutBountyDialog({
         const token = funderAsset === "ETH" ? ETH_ADDRESS : (usdcAddress as Address);
         const decimals = funderAsset === "ETH" ? 18 : 6;
         const amountWei = funderAsset === "ETH" ? parseEther(amount) : parseUnits(amount, decimals);
+
+        // Preflight against on-chain constraints to avoid spending gas on a revert.
+        const [contributedAmountRaw] = (await pc.readContract({
+          address: contractAddress,
+          abi: ghBountiesAbi,
+          functionName: "getContribution",
+          args: [bountyId as Hex, token as Address, account],
+        })) as readonly [bigint, bigint];
+        const [escrowedChainRaw] = (await pc.readContract({
+          address: contractAddress,
+          abi: ghBountiesAbi,
+          functionName: "getTotals",
+          args: [bountyId as Hex, token as Address],
+        })) as readonly [bigint, bigint, bigint];
+        if (amountWei > contributedAmountRaw) {
+          throw new Error(`Amount exceeds your contribution (max ${formatUnits(contributedAmountRaw, decimals)}).`);
+        }
+        if (amountWei > escrowedChainRaw) {
+          throw new Error(`Amount exceeds bounty escrow (max ${formatUnits(escrowedChainRaw, decimals)}).`);
+        }
 
         const hash = await wc.writeContract({
           address: contractAddress,
@@ -329,8 +433,8 @@ export function PayOutBountyDialog({
               <div className="text-xs text-muted-foreground">
                 {repoAsset === "ALL" ? (
                   <>
-                    ETH: {formatUnits(BigInt(escrowedEth || "0"), 18)}
-                    {usdcAddress ? ` • USDC: ${formatUnits(BigInt(escrowedUsdc || "0"), 6)}` : null}
+                    ETH: {formatUnits(BigInt(escrowedEthEffective || "0"), 18)}
+                    {usdcAddress ? ` • USDC: ${formatUnits(BigInt(escrowedUsdcEffective || "0"), 6)}` : null}
                   </>
                 ) : (
                   `Max: ${maxRepoDisplay}`
@@ -386,6 +490,18 @@ export function PayOutBountyDialog({
                 value={amount}
                 onChange={(event) => setAmount(event.target.value)}
               />
+              {(() => {
+                const token = funderAsset === "ETH" ? ETH_ADDRESS.toLowerCase() : usdcAddress?.toLowerCase();
+                if (!token) return null;
+                const contrib = onchainContributionByToken?.[token];
+                if (!contrib) return null;
+                const decimals = funderAsset === "ETH" ? 18 : 6;
+                return (
+                  <div className="text-xs text-muted-foreground">
+                    Max (your contribution): {formatUnits(BigInt(contrib.amount || "0"), decimals)}
+                  </div>
+                );
+              })()}
               {!isFunder ? <div className="text-xs text-muted-foreground">Only funders can use funder payout.</div> : null}
             </div>
           )}

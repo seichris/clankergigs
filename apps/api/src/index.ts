@@ -347,12 +347,13 @@ async function main() {
     const client = createPublicClient({ transport: rpcTransport });
     const signer = privateKeyToAccount(env.BACKEND_SIGNER_PRIVATE_KEY as Hex);
 
-    const authAbi = parseAbi([
-      "function payoutNonces(bytes32 bountyId) view returns (uint256)",
-      "function refundNonces(bytes32 bountyId) view returns (uint256)",
-      "function claimNonces(bytes32 bountyId, address claimer) view returns (uint256)",
-      "function bounties(bytes32 bountyId) view returns (bytes32 repoHash, uint256 issueNumber, uint8 status, uint64 createdAt, string metadataURI)"
-    ]);
+	    const authAbi = parseAbi([
+	      "function payoutNonces(bytes32 bountyId) view returns (uint256)",
+	      "function refundNonces(bytes32 bountyId) view returns (uint256)",
+	      "function claimNonces(bytes32 bountyId, address claimer) view returns (uint256)",
+	      "function escrowed(bytes32 bountyId, address token) view returns (uint256)",
+	      "function bounties(bytes32 bountyId) view returns (bytes32 repoHash, uint256 issueNumber, uint8 status, uint64 createdAt, string metadataURI)"
+	    ]);
 
     app.post("/payout-auth", async (req, reply) => {
       // Preferred: GitHub OAuth login via HttpOnly session cookie.
@@ -432,21 +433,37 @@ async function main() {
         "payout-auth request"
       );
 
-      const bounty = (await client.readContract({
-        address: env.CONTRACT_ADDRESS as Hex,
-        abi: authAbi,
-        functionName: "bounties",
-        args: [bountyId]
-      })) as readonly [Hex, bigint, number, bigint, string];
+	      const bounty = (await client.readContract({
+	        address: env.CONTRACT_ADDRESS as Hex,
+	        abi: authAbi,
+	        functionName: "bounties",
+	        args: [bountyId]
+	      })) as readonly [Hex, bigint, number, bigint, string];
 
-      const createdAt = BigInt(bounty[3] ?? 0n);
-      const issueUrl = (bounty[4] ?? "").toString();
-      if (createdAt === 0n) return reply.code(404).send({ error: "Bounty not found on-chain" });
+	      const createdAt = BigInt(bounty[3] ?? 0n);
+	      const issueUrl = (bounty[4] ?? "").toString();
+	      if (createdAt === 0n) return reply.code(404).send({ error: "Bounty not found on-chain" });
 
-      let owner: string;
-      let repo: string;
-      try {
-        const parsed = parseGithubIssueUrl(issueUrl);
+	      // Preflight the on-chain constraint: payoutWithAuthorization reverts if amount > escrowed[bountyId][token].
+	      // This avoids signing payloads that will fail on-chain (and helps catch indexer/UI mismatches).
+	      const escrowedWei = (await client.readContract({
+	        address: env.CONTRACT_ADDRESS as Hex,
+	        abi: authAbi,
+	        functionName: "escrowed",
+	        args: [bountyId, token]
+	      })) as bigint;
+	      if (amountWei === 0n || amountWei > escrowedWei) {
+	        return reply.code(400).send({
+	          error: "Invalid amount (exceeds escrowed)",
+	          amountWei: amountWei.toString(),
+	          escrowedWei: escrowedWei.toString()
+	        });
+	      }
+
+	      let owner: string;
+	      let repo: string;
+	      try {
+	        const parsed = parseGithubIssueUrl(issueUrl);
         owner = parsed.owner;
         repo = parsed.repo;
       } catch (e: any) {
@@ -797,13 +814,14 @@ async function main() {
 
   // Indexer is optional while bootstrapping the UI, but usually you'll set CONTRACT_ADDRESS.
   if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0) {
-    const indexerCfg = {
-      rpcUrls: env.RPC_URLS,
-      chainId: env.CHAIN_ID,
-      contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
-      github,
-      backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK
-    };
+	    const indexerCfg = {
+	      rpcUrls: env.RPC_URLS,
+	      chainId: env.CHAIN_ID,
+	      contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
+	      github,
+	      backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK,
+	      startBlock: env.INDEXER_START_BLOCK
+	    };
 
     // Don't crash the API if RPC is down / rate limited. Keep retrying in the background.
     void (async () => {
