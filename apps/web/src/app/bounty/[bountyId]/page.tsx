@@ -1,5 +1,7 @@
 "use client";
 
+import { NetworkSelector, useNetwork } from "@/components/network-provider";
+import { networkQuery } from "@/lib/network";
 import * as React from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -80,6 +82,7 @@ function formatTokenAmount(value: string, decimals: number) {
 }
 
 export default function BountyPage() {
+  const { network } = useNetwork();
   const params = useParams<{ bountyId: string }>();
   const bountyId = React.useMemo(() => {
     const raw = params?.bountyId;
@@ -107,7 +110,7 @@ export default function BountyPage() {
       setBounty(null);
       setGithubIssue(null);
       try {
-        const res = await fetch(`${apiUrl}/bounties?bountyId=${encodeURIComponent(bountyId)}`, { credentials: "include" });
+        const res = await fetch(`${apiUrl}/bounties?bountyId=${encodeURIComponent(bountyId)}&${networkQuery(network)}`, { credentials: "include" });
         if (!res.ok) throw new Error(`Failed to load bounty (${res.status})`);
         const json = (await res.json()) as { bounty?: BountyDetail | null };
         const nextBounty = json?.bounty ?? null;
@@ -145,7 +148,7 @@ export default function BountyPage() {
     return () => {
       active = false;
     };
-  }, [apiUrl, bountyId, refreshNonce]);
+  }, [apiUrl, bountyId, refreshNonce, network]);
 
   const parsedIssue = React.useMemo(() => {
     if (!bounty?.metadataURI) return null;
@@ -177,8 +180,8 @@ export default function BountyPage() {
     if (bounty.assets.length === 0) return;
 
     let active = true;
-    const pc = getPublicClient();
-    const { contractAddress } = getConfig();
+    const pc = getPublicClient(network);
+    const { contractAddress } = getConfig(network);
     const tokens = bounty.assets.map((a) => a.token.toLowerCase());
 
     (async () => {
@@ -207,7 +210,7 @@ export default function BountyPage() {
     return () => {
       active = false;
     };
-  }, [bountyId, bounty]);
+  }, [bountyId, bounty, network]);
 
   const escrowedByToken = React.useMemo(() => {
     if (!bounty) return undefined;
@@ -226,6 +229,7 @@ export default function BountyPage() {
             <Link href="/">Back to all bounties</Link>
           </Button>
           <div className="flex flex-wrap items-center gap-2">
+            <NetworkSelector />
             {!address ? (
               <Button
                 variant="outline"

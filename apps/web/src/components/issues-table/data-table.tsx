@@ -762,7 +762,7 @@ function ExpandedIssueRow({
 	        <div className="min-w-0">
 	          <div className="flex flex-wrap items-center gap-3 text-muted-foreground">
 	            <Link
-	              href={`/bounty/${issue.bountyId}`}
+	              href={`/bounty/${issue.bountyId}?chainId=${issue.chainId}&contractAddress=${encodeURIComponent(issue.contractAddress)}`}
 	              className="inline-flex items-center gap-1 text-xs text-foreground hover:underline"
 	              data-no-row-toggle
 	            >
@@ -772,7 +772,7 @@ function ExpandedIssueRow({
 	            <span className="font-mono text-xs">repoHash: {issue.repoHash}</span>
 	            <span className="font-mono text-xs">
 	              bountyId:{" "}
-	              <Link href={`/bounty/${issue.bountyId}`} className="text-muted-foreground hover:underline hover:text-foreground">
+	              <Link href={`/bounty/${issue.bountyId}?chainId=${issue.chainId}&contractAddress=${encodeURIComponent(issue.contractAddress)}`} className="text-muted-foreground hover:underline hover:text-foreground">
 	                {issue.bountyId}
 	              </Link>
 	            </span>

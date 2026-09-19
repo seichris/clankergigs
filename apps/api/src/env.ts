@@ -2,6 +2,7 @@ import { z } from "zod";
 import dotenv from "dotenv";
 
 const EnvSchema = z.object({
+  NETWORKS_JSON: z.string().optional(),
   // Keep DB under prisma/ to avoid clutter and match .gitignore.
   DATABASE_URL: z.string().min(1).default("file:./prisma/dev.db"),
   // Primary RPC URL (local dev, custom chains, etc.). If unset/empty, we fall back to chain-specific RPCs.

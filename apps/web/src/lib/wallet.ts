@@ -1,13 +1,16 @@
-import { createPublicClient, createWalletClient, custom, fallback, http, type Address, type Hex } from "viem";
+import { assertActiveNetwork, type AppNetwork } from "./network";
+import { createPublicClient, createWalletClient, custom, fallback, http, type Address } from "viem";
 import { appChain } from "./chain";
 
-export function getConfig() {
-  const chain = appChain();
-  const contractAddress = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || "") as Hex;
+export function getConfig(network: AppNetwork) {
+  const base = appChain(network.chainId);
+  const urls = network.publicRpcUrls?.length ? network.publicRpcUrls : base.rpcUrls.default.http;
+  const chain = { ...base, name: network.name || base.name, rpcUrls: { default: { http: urls } } };
+  const contractAddress = network.contractAddress;
   const rpcUrl = chain.rpcUrls.default.http[0];
 
   if (!contractAddress || !contractAddress.startsWith("0x") || contractAddress.length !== 42) {
-    throw new Error("Missing NEXT_PUBLIC_CONTRACT_ADDRESS");
+    throw new Error("Missing selected contract address");
   }
 
   if (!rpcUrl) {
@@ -30,16 +33,22 @@ function parseChainIdHex(chainIdHex: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function ensureWalletChain(targetChainId: number) {
+export async function ensureWalletChain(targetChainId: number, network?: AppNetwork) {
+  if (network) assertActiveNetwork(network);
   const eth = (globalThis as any).ethereum;
   if (!eth?.request) throw new Error("No injected wallet found (window.ethereum)");
   const currentHex = await eth.request({ method: "eth_chainId" }).catch(() => null);
   const current = parseChainIdHex(currentHex);
+  if (network) assertActiveNetwork(network);
   if (current === targetChainId) return;
 
   const targetHex = `0x${targetChainId.toString(16)}`;
   try {
     await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: targetHex }] });
+    if (network) assertActiveNetwork(network);
+    const switched = parseChainIdHex(await eth.request({ method: "eth_chainId" }));
+    if (network) assertActiveNetwork(network);
+    if (switched !== targetChainId) throw new Error("Wallet did not switch to the selected chain.");
   } catch (err: any) {
     // Common MetaMask error code when the chain isn't added yet.
     const code = err?.code;
@@ -50,18 +59,30 @@ export async function ensureWalletChain(targetChainId: number) {
   }
 }
 
-export function getPublicClient() {
-  const { chain, rpcUrl } = getConfig();
+export function getPublicClient(network: AppNetwork) {
+  const { chain, rpcUrl } = getConfig(network);
   const rpcUrls = chain.rpcUrls.default.http.filter(Boolean);
   const transport = rpcUrls.length > 1 ? fallback(rpcUrls.map((url) => http(url))) : http(rpcUrl);
   return createPublicClient({ chain, transport });
 }
 
-export function getWalletClient() {
-  const { chain } = getConfig();
+export function getWalletClient(network: AppNetwork) {
+  assertActiveNetwork(network);
+  const { chain } = getConfig(network);
   const eth = (globalThis as any).ethereum;
   if (!eth) throw new Error("No injected wallet found (window.ethereum)");
-  return createWalletClient({ chain, transport: custom(eth) });
+  const guardedProvider = {
+    request: async (args: { method: string; params?: unknown }) => {
+      if (args.method === "eth_sendTransaction" || args.method === "eth_sendRawTransaction") {
+        assertActiveNetwork(network);
+        const current = parseChainIdHex(await eth.request({ method: "eth_chainId" }));
+        assertActiveNetwork(network);
+        if (current !== network.chainId) throw new Error("Wallet chain does not match the selected network.");
+      }
+      return eth.request(args);
+    }
+  };
+  return createWalletClient({ chain, transport: custom(guardedProvider, { retryCount: 0 }) });
 }
 
 export async function requestAccounts(): Promise<Address> {

@@ -52,6 +52,7 @@ scripts-for-ai-agents/# CLI agent scripts (cast/curl/jq/gh)
 ```
 
 ### Setup
+- Node.js 22.13+ (regression tests use the built-in SQLite module), pnpm 9.14.4.
 - Install deps: `pnpm install`
 
 ### Separate DB per branch (recommended)
@@ -77,7 +78,7 @@ To isolate, set a different DB file per branch, e.g.:
    - put the deployed `CONTRACT_ADDRESS` into `.env`
 4) Set web env:
    - copy `apps/web/.env.local.example` -> `apps/web/.env.local`
-   - put the same contract address into `apps/web/.env.local`
+   - the web app discovers the deployed contract from the API at runtime
    - keep `NEXT_PUBLIC_API_URL=http://localhost:8787` (use `localhost`, not `127.0.0.1`, so the session cookie works)
    - for USDC on Sepolia/mainnet you can paste a token address into the UI, or rely on the auto-fill defaults
 5) Run API + web:
@@ -101,7 +102,7 @@ To isolate, set a different DB file per branch, e.g.:
    - copy `apps/web/.env.local.example` -> `apps/web/.env.local`
    - set `NEXT_PUBLIC_CHAIN_ID=11155111`
    - set `NEXT_PUBLIC_RPC_URL` to your Sepolia RPC
-   - set `NEXT_PUBLIC_CONTRACT_ADDRESS` to the deployed address
+   - the web app discovers the contract address from the API
 4) Run API + web:
    - `pnpm --filter @gh-bounties/api dev`
    - `pnpm --filter @gh-bounties/web dev`
@@ -109,10 +110,20 @@ To isolate, set a different DB file per branch, e.g.:
 ### Deploy (Sepolia / Mainnet)
 - Contract deploy prints the deployed address:
   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
-- Recommended: deploy **two separate stacks** (API + DB + web), one per network.
-  - Mainnet stack: `CHAIN_ID=1` + mainnet `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the mainnet web origin.
-  - Sepolia stack: `CHAIN_ID=11155111` + Sepolia `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the Sepolia web origin.
-  - Web network switch (optional): set `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET` and `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA` so users can jump between the two webapps.
+- Run one API, one SQLite database and one web origin with `NETWORKS_JSON`.
+- See [multi-network configuration and migration](docs/multi-network.md) for setup, API request shapes, browser RPCs and rollout precautions.
+- Existing single-network `CHAIN_ID`, `CONTRACT_ADDRESS` and RPC environment variables remain supported when `NETWORKS_JSON` is unset.
+
+### Multi-network regression checks
+
+```sh
+pnpm --filter @gh-bounties/api build
+pnpm test:multi-network
+pnpm --filter @gh-bounties/web typecheck
+pnpm --filter @gh-bounties/web build
+```
+
+Tests use temporary SQLite databases and mocked GitHub, chain and wallet clients; they do not submit transactions. The web build downloads the existing Google Fonts assets.
 
 ## Roadmap
 - Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures

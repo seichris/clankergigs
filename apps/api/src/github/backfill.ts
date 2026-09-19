@@ -1,3 +1,4 @@
+import { networkWhere, type NetworkRegistry } from "../networks.js";
 import type { PrismaClient } from "../../src/generated/prisma/index.js";
 import { getGithubToken, type GithubAuthConfig } from "./appAuth.js";
 import { postPullRequestCommentIfMissing } from "./comments.js";
@@ -6,6 +7,7 @@ import { buildPrClaimReminderComment, PR_CLAIM_REMINDER_MARKER } from "./prRemin
 
 type BackfillOptions = {
   prisma: PrismaClient;
+  networks: NetworkRegistry;
   github: GithubAuthConfig | null;
   repo?: string;
   issueUrl?: string;
@@ -18,6 +20,8 @@ type BackfillOptions = {
 type BackfillIssueResult = {
   issueUrl: string;
   bountyId: string;
+  chainId: number;
+  contractAddress: string;
   prsFound: number;
   created: number;
   updated: number;
@@ -84,15 +88,11 @@ export async function backfillLinkedPullRequests(opts: BackfillOptions) {
   const token = await getGithubToken(opts.github);
   if (!token) return { ok: false, error: "GitHub auth not configured" };
 
-  const chainId = Number(process.env.CHAIN_ID || "0");
-  const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
   const take = Math.min(Math.max(Number(opts.take || 200), 1), 1000);
   const maxPages = Math.min(Math.max(Number(opts.maxPages || 2), 1), 5);
   const normalizedRepo = normalizeRepo(opts.repo);
 
-  const where: any = {};
-  if (chainId) where.chainId = chainId;
-  if (contractAddress) where.contractAddress = contractAddress;
+  const where: any = networkWhere(opts.networks);
   if (opts.issueUrl) {
     const url = opts.issueUrl.trim();
     const alt = url.replace(/^https?:\/\//, "");
@@ -162,8 +162,8 @@ export async function backfillLinkedPullRequests(opts: BackfillOptions) {
       }
 
       await opts.prisma.linkedPullRequest.upsert({
-        where: { bountyId_prUrl: { bountyId: bounty.bountyId, prUrl } },
-        create: { bountyId: bounty.bountyId, prUrl, author, createdAt },
+        where: { bountyDbId_prUrl: { bountyDbId: bounty.id, prUrl } },
+        create: { bountyDbId: bounty.id, bountyId: bounty.bountyId, prUrl, author, createdAt },
         update: { author }
       });
 
@@ -193,6 +193,8 @@ export async function backfillLinkedPullRequests(opts: BackfillOptions) {
     results.push({
       issueUrl: bounty.metadataURI,
       bountyId: bounty.bountyId,
+      chainId: bounty.chainId,
+      contractAddress: bounty.contractAddress,
       prsFound: items.length,
       created: issueCreated,
       updated: issueUpdated,
