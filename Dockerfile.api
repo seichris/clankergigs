@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 RUN corepack enable && corepack prepare pnpm@9.14.4 --activate
 WORKDIR /app
 COPY . .
-RUN pnpm install --frozen-lockfile --filter @gh-bounties/api... \
+RUN pnpm install --prod=false --frozen-lockfile --filter @gh-bounties/api... \
     && pnpm --filter @gh-bounties/api build
 
 ENV NODE_ENV=production
