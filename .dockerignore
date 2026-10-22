@@ -1,0 +1,16 @@
+.git
+**/node_modules
+**/.next
+**/dist
+**/.env*
+**/*.db
+**/*.db-journal
+**/*.db-shm
+**/*.db-wal
+**/*.log
+**/key.pem
+.pnpm-store
+.worktrees
+contracts/out
+contracts/cache
+contracts/broadcast
