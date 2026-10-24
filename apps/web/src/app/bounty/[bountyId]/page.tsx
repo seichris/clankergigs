@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import { NetworkSelector, useNetwork } from "@/components/network-provider";
+import { networkQuery } from "@/lib/networks";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { Address, Hex } from "viem";
@@ -86,13 +88,16 @@ export default function BountyPage() {
     if (Array.isArray(raw)) return raw[0] || "";
     return raw || "";
   }, [params]);
+  const { network } = useNetwork();
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
   const { address, hasProvider, connect } = useWallet();
   const { user, login, logout } = useGithubUser(apiUrl);
 
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-  const [bounty, setBounty] = React.useState<BountyDetail | null>(null);
+  const [loadedBounty, setBounty] = React.useState<BountyDetail | null>(null);
+  const bounty = loadedBounty && network && loadedBounty.chainId === network.chainId &&
+    loadedBounty.contractAddress.toLowerCase() === network.contractAddress ? loadedBounty : null;
   const [githubIssue, setGithubIssue] = React.useState<GithubIssueSummary | null>(null);
   const [fundOpen, setFundOpen] = React.useState(false);
   const [claimOpen, setClaimOpen] = React.useState(false);
@@ -101,13 +106,15 @@ export default function BountyPage() {
 
   React.useEffect(() => {
     let active = true;
+    setFundOpen(false); setClaimOpen(false); setPayOutOpen(false);
+    setBounty(null); setGithubIssue(null);
     const run = async () => {
       setLoading(true);
       setError(null);
       setBounty(null);
       setGithubIssue(null);
       try {
-        const res = await fetch(`${apiUrl}/bounties?bountyId=${encodeURIComponent(bountyId)}`, { credentials: "include" });
+        const res = await fetch(`${apiUrl}/bounties?bountyId=${encodeURIComponent(bountyId)}&${networkQuery(network)}`, { credentials: "include" });
         if (!res.ok) throw new Error(`Failed to load bounty (${res.status})`);
         const json = (await res.json()) as { bounty?: BountyDetail | null };
         const nextBounty = json?.bounty ?? null;
@@ -135,17 +142,17 @@ export default function BountyPage() {
       }
     };
 
-    if (bountyId) {
+    if (bountyId && network) {
       void run();
     } else {
       setLoading(false);
-      setError("Invalid bounty id");
+      setError(network ? "Invalid bounty id" : null);
     }
 
     return () => {
       active = false;
     };
-  }, [apiUrl, bountyId, refreshNonce]);
+  }, [apiUrl, bountyId, refreshNonce, network]);
 
   const parsedIssue = React.useMemo(() => {
     if (!bounty?.metadataURI) return null;
@@ -173,16 +180,17 @@ export default function BountyPage() {
 
   React.useEffect(() => {
     if (!bountyId) return;
-    if (!bounty) return;
+    setOnchainTotalsByToken(null);
+    if (!bounty || !network) return;
     if (bounty.assets.length === 0) return;
 
     let active = true;
-    const pc = getPublicClient();
-    const { contractAddress } = getConfig();
     const tokens = bounty.assets.map((a) => a.token.toLowerCase());
 
     (async () => {
       try {
+        const pc = getPublicClient(network);
+        const { contractAddress } = getConfig(network);
         const rows = await Promise.all(
           tokens.map(async (token) => {
             const res = (await pc.readContract({
@@ -207,7 +215,7 @@ export default function BountyPage() {
     return () => {
       active = false;
     };
-  }, [bountyId, bounty]);
+  }, [bountyId, bounty, network]);
 
   const escrowedByToken = React.useMemo(() => {
     if (!bounty) return undefined;
@@ -223,9 +231,10 @@ export default function BountyPage() {
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Button asChild variant="outline" size="sm">
-            <Link href="/">Back to all bounties</Link>
+            <Link href={network ? `/?${networkQuery(network)}` : "/"}>Back to all bounties</Link>
           </Button>
           <div className="flex flex-wrap items-center gap-2">
+            <NetworkSelector />
             {!address ? (
               <Button
                 variant="outline"
@@ -362,7 +371,7 @@ export default function BountyPage() {
       </div>
 
       <FundIssueDialog
-        open={fundOpen}
+        open={fundOpen && Boolean(bounty)}
         onOpenChange={(next) => {
           if (next && !address) return;
           setFundOpen(next);
@@ -376,7 +385,7 @@ export default function BountyPage() {
       />
 
       <ClaimBountyDialog
-        open={claimOpen}
+        open={claimOpen && Boolean(bounty)}
         onOpenChange={(next) => setClaimOpen(next)}
         walletAddress={address}
         bountyId={bounty?.bountyId ?? null}
@@ -388,7 +397,7 @@ export default function BountyPage() {
       />
 
       <PayOutBountyDialog
-        open={payOutOpen}
+        open={payOutOpen && Boolean(bounty)}
         onOpenChange={setPayOutOpen}
         walletAddress={address}
         onWalletConnect={connect}
