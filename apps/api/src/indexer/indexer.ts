@@ -7,8 +7,9 @@ import { postIssueCommentIfMissing } from "../github/comments.js";
 import { parseGithubIssueUrl } from "../github/parse.js";
 import type { GithubAuthConfig } from "../github/appAuth.js";
 
-type IndexerConfig = {
+export type IndexerConfig = {
   rpcUrls: string[];
+  publicClient?: PublicClient;
   chainId: number;
   contractAddress: Hex;
   github?: GithubAuthConfig | null;
@@ -37,11 +38,13 @@ const erc20MetaAbi = [
   }
 ] as const;
 
-const tokenMetaCache = new Map<string, { decimals: number; symbol: string | null }>();
+const tokenMetaCache = new WeakMap<PublicClient, Map<string, { decimals: number; symbol: string | null }>>();
 
 async function getTokenMeta(client: PublicClient, token: string) {
   if (token === NATIVE_TOKEN) return { decimals: 18, symbol: "ETH" };
-  if (tokenMetaCache.has(token)) return tokenMetaCache.get(token)!;
+  let cache = tokenMetaCache.get(client);
+  if (!cache) { cache = new Map(); tokenMetaCache.set(client, cache); }
+  if (cache.has(token)) return cache.get(token)!;
 
   let decimals = 18;
   let symbol: string | null = null;
@@ -69,7 +72,7 @@ async function getTokenMeta(client: PublicClient, token: string) {
   }
 
   const meta = { decimals, symbol };
-  tokenMetaCache.set(token, meta);
+  cache.set(token, meta);
   return meta;
 }
 
@@ -79,9 +82,9 @@ function statusFromEnum(v: number): "OPEN" | "IMPLEMENTED" | "CLOSED" {
   return "CLOSED";
 }
 
-async function bumpAssetTotals(prisma: any, bountyId: Hex, token: string, delta: { funded?: bigint; escrowed?: bigint; paid?: bigint }) {
+async function bumpAssetTotals(prisma: any, bountyId: Hex, bountyDbId: string, token: string, delta: { funded?: bigint; escrowed?: bigint; paid?: bigint }) {
   const existing = await prisma.bountyAsset.findUnique({
-    where: { bountyId_token: { bountyId, token } }
+    where: { bountyDbId_token: { bountyDbId, token } }
   });
   const funded0 = BigInt(existing?.funded ?? "0");
   const escrow0 = BigInt(existing?.escrowed ?? "0");
@@ -92,8 +95,8 @@ async function bumpAssetTotals(prisma: any, bountyId: Hex, token: string, delta:
   const paid = paid0 + (delta.paid ?? 0n);
 
   await prisma.bountyAsset.upsert({
-    where: { bountyId_token: { bountyId, token } },
-    create: { bountyId, token, funded: funded.toString(), escrowed: escrowed.toString(), paid: paid.toString() },
+    where: { bountyDbId_token: { bountyDbId, token } },
+    create: { bountyId, bountyDbId, token, funded: funded.toString(), escrowed: escrowed.toString(), paid: paid.toString() },
     update: { funded: funded.toString(), escrowed: escrowed.toString(), paid: paid.toString() }
   });
 }
@@ -110,7 +113,7 @@ export async function startIndexer(cfg: IndexerConfig) {
 
   const transport = cfg.rpcUrls.length > 1 ? fallback(cfg.rpcUrls.map((url) => http(url))) : http(cfg.rpcUrls[0]!);
   const chain = cfg.chainId === 1 ? mainnet : cfg.chainId === 11155111 ? sepolia : undefined;
-  const client = createPublicClient({
+  const client = cfg.publicClient ?? createPublicClient({
     chain,
     transport,
   });
@@ -133,24 +136,15 @@ export async function startIndexer(cfg: IndexerConfig) {
   });
   const defaultFrom = BigInt(Math.max(0, Number(head) - 2000));
   const startFrom = typeof cfg.startBlock === "number" && Number.isFinite(cfg.startBlock) ? BigInt(cfg.startBlock) : null;
-  let fromBlock = BigInt(state?.lastBlock ?? (startFrom ?? defaultFrom));
-  if (fromBlock > head) fromBlock = head;
+  const fromBlock = state ? BigInt(state.lastBlock) : (startFrom ?? defaultFrom);
+
 
   await backfill(client, { ...cfg, contractAddress }, fromBlock, head);
 
-  // Live tail.
-  client.watchContractEvent({
-    abi: ghBountiesAbi,
-    address: contractAddress,
-    onLogs: async (logs) => {
-      for (const log of logs) await handleLog(client, { ...cfg, contractAddress }, log, { isBackfill: false });
-    }
-  });
-
-  // Safety net: also poll for new logs and backfill from the last stored block.
-  // This keeps the UI updating even if watchContractEvent is unreliable in some hosting setups.
+  // One ordered poller owns this deployment checkpoint. A second event watcher
+  // could race the poller and advance the checkpoint past unprocessed logs.
   let pollInFlight = false;
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     if (pollInFlight) return;
     pollInFlight = true;
     try {
@@ -158,8 +152,7 @@ export async function startIndexer(cfg: IndexerConfig) {
       const st = await prisma.indexerState.findUnique({
         where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress } }
       });
-      const last = BigInt(st?.lastBlock ?? 0);
-      const from = last > 0n ? last + 1n : headNow;
+      const from = st ? BigInt(st.lastBlock) + 1n : fromBlock;
       if (from <= headNow) {
         await backfill(client, { ...cfg, contractAddress }, from, headNow);
       }
@@ -169,6 +162,7 @@ export async function startIndexer(cfg: IndexerConfig) {
       pollInFlight = false;
     }
   }, 30_000);
+  return () => clearInterval(timer);
 }
 
 async function backfill(
@@ -191,7 +185,12 @@ async function backfill(
       toBlock: chunkEnd
     });
 
-    for (const log of logs) await handleLog(client, cfg, log, { isBackfill: true });
+    logs.sort((a, b) => {
+      const blockA = a.blockNumber ?? 0n, blockB = b.blockNumber ?? 0n;
+      if (blockA !== blockB) return blockA < blockB ? -1 : 1;
+      return (a.logIndex ?? 0) - (b.logIndex ?? 0);
+    });
+    for (const log of logs) await indexLog(client, cfg, log);
 
     await prisma.indexerState.upsert({
       where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress: cfg.contractAddress } },
@@ -203,32 +202,32 @@ async function backfill(
   }
 }
 
-async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opts?: { isBackfill?: boolean }) {
+export async function indexLog(client: PublicClient, cfg: IndexerConfig, log: any) {
   const prisma = getPrisma();
   const blockNumber = Number(log.blockNumber ?? 0n);
   const txHash = log.transactionHash as string;
   const logIndex = Number(log.logIndex ?? 0n);
+
+  const eventBountyId = log.args?.bountyId as Hex | undefined;
+  const parent = eventBountyId && log.eventName !== "BountyCreated"
+    ? await prisma.bounty.findUnique({ where: bountyWhere(cfg, eventBountyId) }) : null;
+  if (eventBountyId && log.eventName !== "BountyCreated" && !parent) {
+    throw new Error(`Missing parent bounty on ${cfg.chainId}:${cfg.contractAddress}; check INDEXER_START_BLOCK`);
+  }
+  const bountyDbId = parent?.id as string;
 
   // NOTE: viem returns args as decoded objects.
   switch (log.eventName as string) {
     case "RepoRegistered": {
       const repoHash = log.args.repoHash as Hex;
       const maintainer = (log.args.maintainer as string).toLowerCase();
-      await prisma.repo.upsert({
-        where: { repoHash },
-        create: { repoHash, maintainerAddress: maintainer },
-        update: { maintainerAddress: maintainer }
-      });
+      await storeRepoMaintainer(cfg, repoHash, maintainer);
       break;
     }
     case "RepoMaintainerChanged": {
       const repoHash = log.args.repoHash as Hex;
       const newMaintainer = (log.args.newMaintainer as string).toLowerCase();
-      await prisma.repo.upsert({
-        where: { repoHash },
-        create: { repoHash, maintainerAddress: newMaintainer },
-        update: { maintainerAddress: newMaintainer }
-      });
+      await storeRepoMaintainer(cfg, repoHash, newMaintainer);
       break;
     }
     case "BountyCreated": {
@@ -244,7 +243,7 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       });
 
       await prisma.bounty.upsert({
-        where: { bountyId },
+        where: bountyWhere(cfg, bountyId),
         create: {
           bountyId,
           repoHash,
@@ -276,22 +275,25 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const funder = (log.args.funder as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
       const lockedUntil = Number(log.args.lockedUntil as bigint);
-      const existingFunding = await prisma.funding.findUnique({
-        where: { txHash_logIndex: { txHash, logIndex } }
+      await prisma.$transaction(async (tx) => {
+        const existingFunding = await tx.funding.findUnique({
+          where: { bountyDbId_txHash_logIndex: { bountyDbId, txHash, logIndex } }
       });
 
-      await prisma.funding.upsert({
-        where: { txHash_logIndex: { txHash, logIndex } },
-        create: { bountyId, token, funder, amountWei, lockedUntil, txHash, logIndex, blockNumber },
+      await tx.funding.upsert({
+        where: { bountyDbId_txHash_logIndex: { bountyDbId, txHash, logIndex } },
+        create: { bountyId, bountyDbId, token, funder, amountWei, lockedUntil, txHash, logIndex, blockNumber },
         update: { bountyId, token, funder, amountWei, lockedUntil, blockNumber }
       });
 
       if (!existingFunding) {
-        await bumpAssetTotals(prisma, bountyId, token, { funded: BigInt(amountWei), escrowed: BigInt(amountWei) });
+        await bumpAssetTotals(tx, bountyId, bountyDbId, token, { funded: BigInt(amountWei), escrowed: BigInt(amountWei) });
       }
 
+      });
+
       try {
-        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const bounty = await prisma.bounty.findUnique({ where: bountyWhere(cfg, bountyId) });
         const issueUrl = bounty?.metadataURI;
         if (issueUrl) {
           const meta = await getTokenMeta(client, token);
@@ -332,13 +334,13 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const metadataURI = (log.args.metadataURI as string) || "";
 
       await prisma.claim.upsert({
-        where: { txHash_logIndex: { txHash, logIndex } },
-        create: { bountyId, claimId, claimer, metadataURI, txHash, logIndex, blockNumber },
+        where: { bountyDbId_txHash_logIndex: { bountyDbId, txHash, logIndex } },
+        create: { bountyId, bountyDbId, claimId, claimer, metadataURI, txHash, logIndex, blockNumber },
         update: { bountyId, claimId, claimer, metadataURI, blockNumber }
       });
 
       try {
-        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const bounty = await prisma.bounty.findUnique({ where: bountyWhere(cfg, bountyId) });
         const issueUrl = bounty?.metadataURI;
         if (issueUrl) {
           let ownerLogin: string | null = null;
@@ -371,10 +373,10 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
     case "StatusChanged": {
       const bountyId = log.args.bountyId as Hex;
       const status = statusFromEnum(Number(log.args.status as bigint));
-      await prisma.bounty.update({ where: { bountyId }, data: { status } });
+      await prisma.bounty.update({ where: bountyWhere(cfg, bountyId), data: { status } });
 
       try {
-        const b = await prisma.bounty.findUnique({ where: { bountyId } });
+        const b = await prisma.bounty.findUnique({ where: bountyWhere(cfg, bountyId) });
         if (b?.metadataURI) await syncBountyLabels({ github: cfg.github ?? null, issueUrl: b.metadataURI, status });
       } catch {
         // best-effort
@@ -386,22 +388,25 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const token = (log.args.token as string).toLowerCase();
       const recipient = (log.args.recipient as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
-      const existingPayout = await prisma.payout.findUnique({
-        where: { txHash_logIndex: { txHash, logIndex } }
+      await prisma.$transaction(async (tx) => {
+        const existingPayout = await tx.payout.findUnique({
+          where: { bountyDbId_txHash_logIndex: { bountyDbId, txHash, logIndex } }
       });
 
-      await prisma.payout.upsert({
-        where: { txHash_logIndex: { txHash, logIndex } },
-        create: { bountyId, token, recipient, amountWei, txHash, logIndex, blockNumber },
+      await tx.payout.upsert({
+        where: { bountyDbId_txHash_logIndex: { bountyDbId, txHash, logIndex } },
+        create: { bountyId, bountyDbId, token, recipient, amountWei, txHash, logIndex, blockNumber },
         update: { bountyId, token, recipient, amountWei, blockNumber }
       });
 
       if (!existingPayout) {
-        await bumpAssetTotals(prisma, bountyId, token, { paid: BigInt(amountWei), escrowed: -BigInt(amountWei) });
+        await bumpAssetTotals(tx, bountyId, bountyDbId, token, { paid: BigInt(amountWei), escrowed: -BigInt(amountWei) });
       }
 
+      });
+
       try {
-        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const bounty = await prisma.bounty.findUnique({ where: bountyWhere(cfg, bountyId) });
         const issueUrl = bounty?.metadataURI;
         if (issueUrl) {
           const meta = await getTokenMeta(client, token);
@@ -436,22 +441,25 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       const token = (log.args.token as string).toLowerCase();
       const funder = (log.args.funder as string).toLowerCase();
       const amountWei = (log.args.amount as bigint).toString();
-      const existingRefund = await prisma.refund.findUnique({
-        where: { txHash_logIndex: { txHash, logIndex } }
+      await prisma.$transaction(async (tx) => {
+        const existingRefund = await tx.refund.findUnique({
+          where: { bountyDbId_txHash_logIndex: { bountyDbId, txHash, logIndex } }
       });
 
-      await prisma.refund.upsert({
-        where: { txHash_logIndex: { txHash, logIndex } },
-        create: { bountyId, token, funder, amountWei, txHash, logIndex, blockNumber },
+      await tx.refund.upsert({
+        where: { bountyDbId_txHash_logIndex: { bountyDbId, txHash, logIndex } },
+        create: { bountyId, bountyDbId, token, funder, amountWei, txHash, logIndex, blockNumber },
         update: { bountyId, token, funder, amountWei, blockNumber }
       });
 
       if (!existingRefund) {
-        await bumpAssetTotals(prisma, bountyId, token, { escrowed: -BigInt(amountWei) });
+        await bumpAssetTotals(tx, bountyId, bountyDbId, token, { escrowed: -BigInt(amountWei) });
       }
 
+      });
+
       try {
-        const bounty = await prisma.bounty.findUnique({ where: { bountyId } });
+        const bounty = await prisma.bounty.findUnique({ where: bountyWhere(cfg, bountyId) });
         const issueUrl = bounty?.metadataURI;
         if (issueUrl) {
           const meta = await getTokenMeta(client, token);
@@ -485,9 +493,19 @@ async function handleLog(client: PublicClient, cfg: IndexerConfig, log: any, opt
       break;
   }
 
-  await prisma.indexerState.upsert({
-    where: { chainId_contractAddress: { chainId: cfg.chainId, contractAddress: cfg.contractAddress } },
-    create: { chainId: cfg.chainId, contractAddress: cfg.contractAddress, lastBlock: blockNumber },
-    update: { lastBlock: blockNumber }
+}
+
+function bountyWhere(cfg: IndexerConfig, bountyId: string) {
+  return { bountyId_chainId_contractAddress: { bountyId, chainId: cfg.chainId, contractAddress: cfg.contractAddress.toLowerCase() } };
+}
+
+async function storeRepoMaintainer(cfg: IndexerConfig, repoHash: string, maintainerAddress: string) {
+  await getPrisma().$transaction(async tx => {
+    await tx.repo.upsert({ where: { repoHash }, create: { repoHash, maintainerAddress }, update: {} });
+    const deployment = { repoHash, chainId: cfg.chainId, contractAddress: cfg.contractAddress.toLowerCase() };
+    await tx.repoDeployment.upsert({
+      where: { repoHash_chainId_contractAddress: deployment },
+      create: { ...deployment, maintainerAddress }, update: { maintainerAddress },
+    });
   });
 }

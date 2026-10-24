@@ -1,8 +1,10 @@
+import { createNetworkRegistry, networkSelector, configuredNetwork, resolveBountyNetwork, NetworkRequestError, type Network, type NetworkRegistry } from "./networks.js";
 import crypto from "node:crypto";
-import { loadEnv } from "./env.js";
+import { pathToFileURL } from "node:url";
+import { loadEnv, type Env } from "./env.js";
 import { buildServer } from "./server.js";
 import { startIndexer } from "./indexer/indexer.js";
-import { concatBytes, createPublicClient, fallback, http, isAddress, keccak256, parseAbi, stringToHex, toBytes, type Address, type Hex } from "viem";
+import { concatBytes, isAddress, keccak256, parseAbi, stringToHex, toBytes, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.js";
 import { backfillLinkedPullRequests } from "./github/backfill.js";
@@ -33,17 +35,23 @@ function retryAfterMsFromError(err: unknown): number | null {
   return 300_000;
 }
 
-async function main() {
-  const env = loadEnv();
+async function verifySigningNetwork(network: Network, signerAddress: string) {
+  const actualChainId = await network.publicClient.getChainId();
+  if (actualChainId !== network.chainId) throw new NetworkRequestError("Configured RPC chain mismatch", 503);
+  const authorizer = await network.publicClient.readContract({
+    address: network.contractAddress, abi: parseAbi(["function payoutAuthorizer() view returns (address)"]),
+    functionName: "payoutAuthorizer",
+  });
+  if (authorizer.toLowerCase() !== signerAddress.toLowerCase()) {
+    throw new NetworkRequestError("Signer is not the authorizer for the selected deployment", 503);
+  }
+}
+
+export async function createApplication(env: Env, options: { background?: boolean; networks?: NetworkRegistry } = {}) {
   // Prisma reads DATABASE_URL from process.env at construction time.
   process.env.DATABASE_URL ||= env.DATABASE_URL;
 
-  if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0 && env.RPC_URLS.length === 0) {
-    throw new Error("RPC not configured. Set RPC_URL (comma-separated ok) or RPC_URLS_ETHEREUM_SEPOLIA/RPC_URLS_ETHEREUM_MAINNET.");
-  }
-
-  const rpcTransport =
-    env.RPC_URLS.length > 1 ? fallback(env.RPC_URLS.map((url) => http(url))) : http(env.RPC_URLS[0] || "");
+  const networks = options.networks ?? createNetworkRegistry(env.NETWORKS);
 
   const githubMode = env.GITHUB_AUTH_MODE ?? "pat";
   const github =
@@ -55,7 +63,7 @@ async function main() {
         ? { userToken: env.GITHUB_TOKEN }
         : null;
 
-  const app = await buildServer({ github });
+  const app = await buildServer({ github, networks });
 
   app.get("/id", async (req, reply) => {
     const q = req.query as { repo?: string; issue?: string };
@@ -83,8 +91,10 @@ async function main() {
   });
 
   app.get("/contract", async (req, reply) => {
-    if (!env.CONTRACT_ADDRESS) return reply.code(400).send({ error: "CONTRACT_ADDRESS not configured" });
-    const client = createPublicClient({ transport: rpcTransport });
+    const selector = networkSelector(req.query as { chainId?: string; contractAddress?: string });
+    const network = selector ? configuredNetwork(networks, selector) : networks.size === 1 ? [...networks.values()][0]! : null;
+    if (!network) throw new NetworkRequestError("Select chainId and contractAddress", 409);
+    const client = network.publicClient;
     const abi = parseAbi([
       "function payoutAuthorizer() view returns (address)",
       "function dao() view returns (address)",
@@ -92,16 +102,15 @@ async function main() {
       "function defaultLockDuration() view returns (uint64)"
     ]);
     const [payoutAuthorizer, dao, daoDelaySeconds, defaultLockDuration] = await Promise.all([
-      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "payoutAuthorizer" }) as Promise<Hex>,
-      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "dao" }) as Promise<Hex>,
-      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "daoDelaySeconds" }) as Promise<bigint>,
-      client.readContract({ address: env.CONTRACT_ADDRESS as Hex, abi, functionName: "defaultLockDuration" }) as Promise<bigint>
+      client.readContract({ address: network.contractAddress, abi, functionName: "payoutAuthorizer" }) as Promise<Hex>,
+      client.readContract({ address: network.contractAddress, abi, functionName: "dao" }) as Promise<Hex>,
+      client.readContract({ address: network.contractAddress, abi, functionName: "daoDelaySeconds" }) as Promise<bigint>,
+      client.readContract({ address: network.contractAddress, abi, functionName: "defaultLockDuration" }) as Promise<bigint>
     ]);
 
     return reply.send({
-      chainId: env.CHAIN_ID,
-      rpcUrl: env.RPC_URL,
-      contractAddress: env.CONTRACT_ADDRESS,
+      chainId: network.chainId,
+      contractAddress: network.contractAddress,
       payoutAuthorizer,
       dao,
       daoDelaySeconds: daoDelaySeconds.toString(),
@@ -110,14 +119,15 @@ async function main() {
   });
 
   app.get("/github/admin", async (req, reply) => {
-    const q = req.query as { bountyId?: string };
+    const q = req.query as { bountyId?: string; chainId?: string; contractAddress?: string };
     if (!q.bountyId) return reply.code(400).send({ error: "Missing bountyId", isAdmin: false });
 
     const { githubToken } = await resolveGithubAuthFromRequest(req);
     if (!githubToken) return reply.code(401).send({ error: "Missing GitHub auth", isAdmin: false });
 
     const prisma = getPrisma();
-    const bounty = await prisma.bounty.findUnique({ where: { bountyId: q.bountyId } });
+    const network = await resolveBountyNetwork(networks, prisma, q, q.bountyId);
+    const bounty = await prisma.bounty.findUnique({ where: { bountyId_chainId_contractAddress: { bountyId: q.bountyId, chainId: network.chainId, contractAddress: network.contractAddress } } });
     if (!bounty) return reply.code(404).send({ error: "Unknown bountyId", isAdmin: false });
 
     let owner: string;
@@ -343,8 +353,7 @@ async function main() {
   });
 
   // Payout authorization: verify GitHub admin and sign an EIP-712 authorization.
-  if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0 && env.BACKEND_SIGNER_PRIVATE_KEY && env.BACKEND_SIGNER_PRIVATE_KEY.length > 0) {
-    const client = createPublicClient({ transport: rpcTransport });
+  if (networks.size > 0 && env.BACKEND_SIGNER_PRIVATE_KEY && env.BACKEND_SIGNER_PRIVATE_KEY.length > 0) {
     const signer = privateKeyToAccount(env.BACKEND_SIGNER_PRIVATE_KEY as Hex);
 
 	    const authAbi = parseAbi([
@@ -414,6 +423,9 @@ async function main() {
         return reply.code(400).send({ error: "Invalid bountyId", received: bountyIdRaw ?? null });
       }
       const bountyId = bountyIdStr as Hex;
+      const network = await resolveBountyNetwork(networks, getPrisma(), body, bountyId);
+      const client = network.publicClient;
+      await verifySigningNetwork(network, signer.address);
       if (!token || !isAddress(token)) return reply.code(400).send({ error: "Invalid token address" });
       if (!recipient || !isAddress(recipient)) return reply.code(400).send({ error: "Invalid recipient address" });
       if (!amountWeiStr || !/^\d+$/.test(amountWeiStr)) return reply.code(400).send({ error: "Invalid amountWei" });
@@ -434,7 +446,7 @@ async function main() {
       );
 
 	      const bounty = (await client.readContract({
-	        address: env.CONTRACT_ADDRESS as Hex,
+	        address: network.contractAddress,
 	        abi: authAbi,
 	        functionName: "bounties",
 	        args: [bountyId]
@@ -447,7 +459,7 @@ async function main() {
 	      // Preflight the on-chain constraint: payoutWithAuthorization reverts if amount > escrowed[bountyId][token].
 	      // This avoids signing payloads that will fail on-chain (and helps catch indexer/UI mismatches).
 	      const escrowedWei = (await client.readContract({
-	        address: env.CONTRACT_ADDRESS as Hex,
+	        address: network.contractAddress,
 	        abi: authAbi,
 	        functionName: "escrowed",
 	        args: [bountyId, token]
@@ -494,14 +506,14 @@ async function main() {
       if (!ghData?.permissions?.admin) return reply.code(403).send({ error: "GitHub user is not a repo admin" });
 
       const nonce = (await client.readContract({
-        address: env.CONTRACT_ADDRESS as Hex,
+        address: network.contractAddress,
         abi: authAbi,
         functionName: "payoutNonces",
         args: [bountyId]
       })) as bigint;
 
       const signature = await signer.signTypedData({
-        domain: { name: "GHBounties", version: "1", chainId: env.CHAIN_ID, verifyingContract: env.CONTRACT_ADDRESS as Hex },
+        domain: { name: "GHBounties", version: "1", chainId: network.chainId, verifyingContract: network.contractAddress },
         types: {
           Payout: [
             { name: "bountyId", type: "bytes32" },
@@ -594,11 +606,14 @@ async function main() {
         return reply.code(400).send({ error: "Invalid bountyId", received: bountyIdRaw ?? null });
       }
       const bountyId = bountyIdStr as Hex;
+      const network = await resolveBountyNetwork(networks, getPrisma(), body, bountyId);
+      const client = network.publicClient;
+      await verifySigningNetwork(network, signer.address);
       if (!claimer || !isAddress(claimer)) return reply.code(400).send({ error: "Invalid claimer address" });
       if (!claimMetadataURI) return reply.code(400).send({ error: "Missing claimMetadataURI" });
 
       const bounty = (await client.readContract({
-        address: env.CONTRACT_ADDRESS as Hex,
+        address: network.contractAddress,
         abi: authAbi,
         functionName: "bounties",
         args: [bountyId]
@@ -658,7 +673,7 @@ async function main() {
       }
 
       const nonce = (await client.readContract({
-        address: env.CONTRACT_ADDRESS as Hex,
+        address: network.contractAddress,
         abi: authAbi,
         functionName: "claimNonces",
         args: [bountyId, claimer]
@@ -668,7 +683,7 @@ async function main() {
       const claimHash = keccak256(toBytes(claimMetadataURI));
 
       const signature = await signer.signTypedData({
-        domain: { name: "GHBounties", version: "1", chainId: env.CHAIN_ID, verifyingContract: env.CONTRACT_ADDRESS as Hex },
+        domain: { name: "GHBounties", version: "1", chainId: network.chainId, verifyingContract: network.contractAddress },
         types: {
           Claim: [
             { name: "bountyId", type: "bytes32" },
@@ -726,6 +741,9 @@ async function main() {
       if (/^[a-fA-F0-9]{64}$/.test(bountyIdStr)) bountyIdStr = `0x${bountyIdStr}`;
       if (!/^0x[a-fA-F0-9]{64}$/.test(bountyIdStr)) return reply.code(400).send({ error: "Invalid bountyId" });
       const bountyId = bountyIdStr as Hex;
+      const network = await resolveBountyNetwork(networks, getPrisma(), body, bountyId);
+      const client = network.publicClient;
+      await verifySigningNetwork(network, signer.address);
       if (!token || !isAddress(token)) return reply.code(400).send({ error: "Invalid token address" });
       if (!funder || !isAddress(funder)) return reply.code(400).send({ error: "Invalid funder address" });
       if (!amountWeiStr || !/^\d+$/.test(amountWeiStr)) return reply.code(400).send({ error: "Invalid amountWei" });
@@ -734,7 +752,7 @@ async function main() {
       const deadline = deadlineStr && /^\d+$/.test(deadlineStr) ? BigInt(deadlineStr) : BigInt(Math.floor(Date.now() / 1000) + 10 * 60);
 
       const bounty = (await client.readContract({
-        address: env.CONTRACT_ADDRESS as Hex,
+        address: network.contractAddress,
         abi: authAbi,
         functionName: "bounties",
         args: [bountyId]
@@ -775,14 +793,14 @@ async function main() {
       if (!ghData?.permissions?.admin) return reply.code(403).send({ error: "GitHub user is not a repo admin" });
 
       const nonce = (await client.readContract({
-        address: env.CONTRACT_ADDRESS as Hex,
+        address: network.contractAddress,
         abi: authAbi,
         functionName: "refundNonces",
         args: [bountyId]
       })) as bigint;
 
       const signature = await signer.signTypedData({
-        domain: { name: "GHBounties", version: "1", chainId: env.CHAIN_ID, verifyingContract: env.CONTRACT_ADDRESS as Hex },
+        domain: { name: "GHBounties", version: "1", chainId: network.chainId, verifyingContract: network.contractAddress },
         types: {
           Refund: [
             { name: "bountyId", type: "bytes32" },
@@ -809,45 +827,43 @@ async function main() {
 
     app.log.info({ signer: signer.address }, "payout auth enabled");
   } else {
-    app.log.warn("payout auth disabled (missing CONTRACT_ADDRESS or BACKEND_SIGNER_PRIVATE_KEY)");
+    app.log.warn("payout auth disabled (missing configured networks or BACKEND_SIGNER_PRIVATE_KEY)");
   }
 
-  // Indexer is optional while bootstrapping the UI, but usually you'll set CONTRACT_ADDRESS.
-  if (env.CONTRACT_ADDRESS && env.CONTRACT_ADDRESS.length > 0) {
-	    const indexerCfg = {
-	      rpcUrls: env.RPC_URLS,
-	      chainId: env.CHAIN_ID,
-	      contractAddress: (env.CONTRACT_ADDRESS.toLowerCase() as any),
-	      github,
-	      backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK,
-	      startBlock: env.INDEXER_START_BLOCK
-	    };
-
-    // Don't crash the API if RPC is down / rate limited. Keep retrying in the background.
+  // Each deployment has an independent checkpoint and retry loop.
+  let shuttingDown = false;
+  const stopIndexers: Array<() => void> = [];
+  app.addHook("onClose", async () => {
+    shuttingDown = true;
+    for (const stop of stopIndexers) stop();
+  });
+  for (const network of options.background === false ? [] : networks.values()) {
+    const indexerCfg = {
+      rpcUrls: network.rpcUrls, publicClient: network.publicClient,
+      chainId: network.chainId, contractAddress: network.contractAddress,
+      github, backfillBlockChunk: env.INDEXER_BACKFILL_BLOCK_CHUNK,
+      startBlock: network.startBlock ?? env.INDEXER_START_BLOCK,
+    };
     void (async () => {
       let delayMs = 5_000;
-      while (true) {
+      while (!shuttingDown) {
         try {
-          await startIndexer(indexerCfg);
-          app.log.info({ contract: env.CONTRACT_ADDRESS, chainId: env.CHAIN_ID }, "indexer started");
+          const stop = await startIndexer(indexerCfg);
+          if (shuttingDown) stop(); else stopIndexers.push(stop);
+          app.log.info({ deployment: network.key }, "indexer started");
           return;
-        } catch (err: any) {
-          const retryAfterMs = retryAfterMsFromError(err);
-          if (retryAfterMs) delayMs = Math.max(delayMs, retryAfterMs);
-          app.log.error(
-            { err: err?.shortMessage ?? err?.message ?? String(err), delayMs, rpcUrl: env.RPC_URL },
-            "indexer failed to start; retrying"
-          );
+        } catch (err) {
+          delayMs = Math.max(delayMs, retryAfterMsFromError(err) ?? 0);
+          // RPC error objects may contain provider credentials; identify only the deployment.
+          app.log.warn({ deployment: network.key, delayMs }, "indexer failed to start; retrying");
           await sleep(delayMs);
-          delayMs = Math.min(delayMs * 2, 60_000);
+          delayMs = Math.min(delayMs * 2, 300_000);
         }
       }
     })();
-  } else {
-    app.log.warn("CONTRACT_ADDRESS is empty; indexer disabled");
   }
 
-  if (env.GITHUB_BACKFILL_INTERVAL_MINUTES > 0) {
+  if (options.background !== false && env.GITHUB_BACKFILL_INTERVAL_MINUTES > 0) {
     let backfillInFlight = false;
     const intervalMs = env.GITHUB_BACKFILL_INTERVAL_MINUTES * 60 * 1000;
     const prisma = getPrisma();
@@ -892,17 +908,24 @@ async function main() {
     runBackfill().catch(() => {
       // logged inside
     });
-    setInterval(() => {
+    const timer = setInterval(() => {
       runBackfill().catch(() => {
         // logged inside
       });
     }, intervalMs);
+    app.addHook("onClose", async () => clearInterval(timer));
   }
 
+  return app;
+}
+
+async function main() {
+  const env = loadEnv();
+  const app = await createApplication(env);
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
 }
 
-main().catch((err) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((err) => {
   // eslint-disable-next-line no-console
   console.error(err);
   process.exit(1);

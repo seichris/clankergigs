@@ -1,3 +1,4 @@
+import { networkSelector, configuredNetwork, publicNetworks, type NetworkRegistry } from "./networks.js";
 import Fastify from "fastify";
 import cors, { type FastifyCorsOptions } from "@fastify/cors";
 import { getPrisma } from "./db.js";
@@ -8,9 +9,15 @@ import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.j
 import { fetchGithubIssueByUrl } from "./github/issue.js";
 import { backfillLinkedPullRequests } from "./github/backfill.js";
 
-export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
+export async function buildServer(opts?: { github?: GithubAuthConfig | null; networks?: NetworkRegistry }) {
   const app = Fastify({ logger: true });
   const prisma = getPrisma();
+  const networks = opts?.networks ?? new Map();
+  const filterNetwork = (input: { chainId?: unknown; contractAddress?: unknown }) => {
+    const selector = networkSelector(input);
+    if (selector) configuredNetwork(networks, selector);
+    return selector ?? {};
+  };
 
   const webOrigin = process.env.WEB_ORIGIN || "http://localhost:3000";
   const webOrigins = webOrigin
@@ -27,6 +34,7 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
   await app.register(cors, { origin: corsOrigin, credentials: true });
 
   app.get("/health", async () => ({ ok: true }));
+  app.get("/networks", async () => ({ networks: publicNetworks(networks) }));
 
   registerGithubOAuthRoutes(app);
 
@@ -79,17 +87,16 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
     return reply.code(status).send(result);
   });
 
-  app.get("/bounties", async (req) => {
-    const q = req.query as { repoHash?: string; issueNumber?: string; bountyId?: string };
-    const chainId = Number(process.env.CHAIN_ID || "0");
-    const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
+  app.get("/bounties", async (req, reply) => {
+    const q = req.query as { repoHash?: string; issueNumber?: string; bountyId?: string; chainId?: string; contractAddress?: string };
+    const deployment = filterNetwork(q);
     if (q.bountyId) {
-      const b = await prisma.bounty.findFirst({
+      const matches = await prisma.bounty.findMany({
         where: {
           bountyId: q.bountyId,
-          ...(chainId ? { chainId } : {}),
-          ...(contractAddress ? { contractAddress } : {})
+          ...deployment
         },
+        take: 2,
         include: {
           assets: true,
           fundings: true,
@@ -99,12 +106,11 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
           linkedPullRequests: { select: { prUrl: true, author: true, createdAt: true } }
         }
       });
-      return { bounty: b };
+      if (matches.length > 1) return reply.code(409).send({ error: "Ambiguous bountyId: provide chainId and contractAddress" });
+      return { bounty: matches[0] ?? null };
     }
 
-    const where: any = {};
-    if (chainId) where.chainId = chainId;
-    if (contractAddress) where.contractAddress = contractAddress;
+    const where: any = { ...deployment };
     if (q.repoHash) where.repoHash = q.repoHash;
     if (q.issueNumber) where.issueNumber = Number(q.issueNumber);
 
@@ -117,14 +123,11 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
   });
 
   app.get("/issues", async (req) => {
-    const q = req.query as { q?: string; status?: string; take?: string; include?: string };
-    const chainId = Number(process.env.CHAIN_ID || "0");
-    const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
+    const q = req.query as { q?: string; status?: string; take?: string; include?: string; chainId?: string; contractAddress?: string };
+    const deployment = filterNetwork(q);
     const take = Math.min(Math.max(Number(q.take || "200"), 1), 500);
     const includeGithub = q.include === "github";
-    const where: any = {};
-    if (chainId) where.chainId = chainId;
-    if (contractAddress) where.contractAddress = contractAddress;
+    const where: any = { ...deployment };
     if (q.status) where.status = q.status;
 
     const bounties = await prisma.bounty.findMany({

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useNetwork } from "@/components/network-provider";
 import type { Address, Hex } from "viem";
 import { formatUnits, isAddress, parseEther, parseUnits } from "viem";
 
@@ -57,6 +58,7 @@ export function PayoutDialog({
   onPayouted?: () => void;
   escrowedByToken?: Record<string, string>;
 }) {
+  const { network } = useNetwork();
   const [asset, setAsset] = React.useState<"ETH" | "USDC">("ETH");
   const [recipient, setRecipient] = React.useState("");
   const [amount, setAmount] = React.useState("");
@@ -83,7 +85,7 @@ export function PayoutDialog({
     }
   }, [open]);
 
-  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const chainId = (network?.chainId ?? 0);
   const usdcAddress = usdcAddressForChainId(chainId);
 
   const title =
@@ -106,7 +108,7 @@ export function PayoutDialog({
     }
   })();
 
-  const canSubmit = Boolean(
+  const canSubmit = Boolean(network &&
     walletAddress &&
       bountyId &&
       resolvedRecipient &&
@@ -137,10 +139,10 @@ export function PayoutDialog({
     setError(null);
 
     try {
-      const { contractAddress } = getConfig();
-      const wc = getWalletClient();
+      const { contractAddress } = getConfig(network);
+      const wc = getWalletClient(network);
       const [account] = await wc.getAddresses();
-      const pc = getPublicClient();
+      const pc = getPublicClient(network);
 
       const token = asset === "ETH" ? ETH_ADDRESS : (usdcAddress as Address);
       const decimals = asset === "ETH" ? 18 : 6;
@@ -152,6 +154,7 @@ export function PayoutDialog({
           headers: { "Content-Type": "application/json" },
           credentials: "include",
           body: JSON.stringify({
+          ...network,
             bountyId,
             token,
             recipient: resolvedRecipient,

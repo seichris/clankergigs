@@ -1,7 +1,9 @@
 import { z } from "zod";
 import dotenv from "dotenv";
+import { parseNetworks, type NetworkConfig } from "./networks.js";
 
 const EnvSchema = z.object({
+  NETWORKS_JSON: z.string().optional(),
   // Keep DB under prisma/ to avoid clutter and match .gitignore.
   DATABASE_URL: z.string().min(1).default("file:./prisma/dev.db"),
   // Primary RPC URL (local dev, custom chains, etc.). If unset/empty, we fall back to chain-specific RPCs.
@@ -73,7 +75,7 @@ const EnvSchema = z.object({
 
 type ParsedEnv = z.infer<typeof EnvSchema>;
 
-export type Env = ParsedEnv & { RPC_URLS: string[] };
+export type Env = ParsedEnv & { RPC_URLS: string[]; NETWORKS: NetworkConfig[] };
 
 function sanitizeRpcUrl(input: string) {
   let url = input.trim();
@@ -131,5 +133,6 @@ export function loadEnv(): Env {
 
   const rpcUrl = rpcUrls[0] || "";
 
-  return { ...env, RPC_URL: rpcUrl, RPC_URLS: rpcUrls };
+  return { ...env, RPC_URL: rpcUrl, RPC_URLS: rpcUrls,
+    NETWORKS: parseNetworks(env.NETWORKS_JSON, { ...env, RPC_URLS: rpcUrls }) };
 }

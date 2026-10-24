@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useNetwork } from "@/components/network-provider";
 import type { Address, Hex } from "viem";
 import { formatUnits, isAddress, parseEther, parseUnits } from "viem";
 
@@ -41,6 +42,7 @@ export function AdminPayoutDialog({
   onGithubLogin: () => void;
   onPayouted?: () => void;
 }) {
+  const { network } = useNetwork();
   const [asset, setAsset] = React.useState<AssetChoice>("ALL");
   const [recipient, setRecipient] = React.useState("");
   const [amount, setAmount] = React.useState("");
@@ -48,7 +50,7 @@ export function AdminPayoutDialog({
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
-  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const chainId = (network?.chainId ?? 0);
   const usdcAddress = usdcAddressForChainId(chainId);
 
   const escrowedEth = escrowedByToken?.[ETH_ADDRESS.toLowerCase()] || "0";
@@ -102,21 +104,22 @@ export function AdminPayoutDialog({
     setAmount(maxDisplay);
   }, [open, asset, maxDisplay, autoAmount]);
 
-  const canSubmit = Boolean(walletAddress && bountyId && isAddress(recipient) && githubUser);
+  const canSubmit = Boolean(network && walletAddress && bountyId && isAddress(recipient) && githubUser);
 
   async function submitOnchainPayout(opts: { token: Address; amountWei: bigint }) {
     if (!bountyId) throw new Error("Missing bounty id.");
-    const { contractAddress } = getConfig();
+    const { contractAddress } = getConfig(network);
     await ensureWalletChain(chainId);
-    const wc = getWalletClient();
+    const wc = getWalletClient(network);
     const [account] = await wc.getAddresses();
-    const pc = getPublicClient();
+    const pc = getPublicClient(network);
 
     const authRes = await fetch(`${apiUrl}/payout-auth`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({
+          ...network,
         bountyId,
         token: opts.token,
         recipient: recipient.trim(),

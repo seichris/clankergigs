@@ -77,7 +77,7 @@ To isolate, set a different DB file per branch, e.g.:
    - put the deployed `CONTRACT_ADDRESS` into `.env`
 4) Set web env:
    - copy `apps/web/.env.local.example` -> `apps/web/.env.local`
-   - put the same contract address into `apps/web/.env.local`
+   - the web app discovers the contract address from the API (`GET /networks`)
    - keep `NEXT_PUBLIC_API_URL=http://localhost:8787` (use `localhost`, not `127.0.0.1`, so the session cookie works)
    - for USDC on Sepolia/mainnet you can paste a token address into the UI, or rely on the auto-fill defaults
 5) Run API + web:
@@ -101,7 +101,7 @@ To isolate, set a different DB file per branch, e.g.:
    - copy `apps/web/.env.local.example` -> `apps/web/.env.local`
    - set `NEXT_PUBLIC_CHAIN_ID=11155111`
    - set `NEXT_PUBLIC_RPC_URL` to your Sepolia RPC
-   - set `NEXT_PUBLIC_CONTRACT_ADDRESS` to the deployed address
+   - the contract address is discovered from the API (`GET /networks`)
 4) Run API + web:
    - `pnpm --filter @gh-bounties/api dev`
    - `pnpm --filter @gh-bounties/web dev`
@@ -109,10 +109,12 @@ To isolate, set a different DB file per branch, e.g.:
 ### Deploy (Sepolia / Mainnet)
 - Contract deploy prints the deployed address:
   - `RPC_URL=... PRIVATE_KEY=... pnpm contracts:deploy`
-- Recommended: deploy **two separate stacks** (API + DB + web), one per network.
-  - Mainnet stack: `CHAIN_ID=1` + mainnet `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the mainnet web origin.
-  - Sepolia stack: `CHAIN_ID=11155111` + Sepolia `CONTRACT_ADDRESS`, its own `DATABASE_URL`, and `WEB_ORIGIN` pointing at the Sepolia web origin.
-  - Web network switch (optional): set `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET` and `NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA` so users can jump between the two webapps.
+- One API and SQLite DB can serve multiple `(chainId, contractAddress)` deployments.
+  Set `NETWORKS_JSON`, apply the migration, and point one web origin at that API.
+  The web selector discovers networks at runtime and persists the selection.
+- Existing single-network API env vars remain a fallback when `NETWORKS_JSON` is blank.
+- See [multi-network configuration, migration and validation](docs/multi-network.md)
+  before upgrading an existing DB or adding a deployment.
 
 ## Roadmap
 - Use zkTLS to reduce trust in our backend that attests with EIP‑712 signatures
