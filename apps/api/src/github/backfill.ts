@@ -84,15 +84,11 @@ export async function backfillLinkedPullRequests(opts: BackfillOptions) {
   const token = await getGithubToken(opts.github);
   if (!token) return { ok: false, error: "GitHub auth not configured" };
 
-  const chainId = Number(process.env.CHAIN_ID || "0");
-  const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
   const take = Math.min(Math.max(Number(opts.take || 200), 1), 1000);
   const maxPages = Math.min(Math.max(Number(opts.maxPages || 2), 1), 5);
   const normalizedRepo = normalizeRepo(opts.repo);
 
   const where: any = {};
-  if (chainId) where.chainId = chainId;
-  if (contractAddress) where.contractAddress = contractAddress;
   if (opts.issueUrl) {
     const url = opts.issueUrl.trim();
     const alt = url.replace(/^https?:\/\//, "");
@@ -162,8 +158,8 @@ export async function backfillLinkedPullRequests(opts: BackfillOptions) {
       }
 
       await opts.prisma.linkedPullRequest.upsert({
-        where: { bountyId_prUrl: { bountyId: bounty.bountyId, prUrl } },
-        create: { bountyId: bounty.bountyId, prUrl, author, createdAt },
+        where: { bountyDbId_prUrl: { bountyDbId: bounty.id, prUrl } },
+        create: { bountyId: bounty.bountyId, bountyDbId: bounty.id, prUrl, author, createdAt },
         update: { author }
       });
 
