@@ -11,16 +11,30 @@ datasource db {
 model Repo {
   id                String   @id @default(cuid())
   repoHash          String   @unique
+  // Legacy snapshot retained for migration compatibility. Use deployments for authority.
   maintainerAddress String
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
   bounties Bounty[]
+  deployments RepoDeployment[]
+}
+
+// Repo identity is global; on-chain authority is deployment-specific.
+model RepoDeployment {
+  id String @id @default(cuid())
+  repoHash String
+  chainId Int
+  contractAddress String
+  maintainerAddress String
+  repo Repo @relation(fields: [repoHash], references: [repoHash])
+
+  @@unique([repoHash, chainId, contractAddress])
 }
 
 model Bounty {
   id          String   @id @default(cuid())
-  bountyId    String   @unique
+  bountyId    String
   repoHash    String
   issueNumber Int
   metadataURI String
@@ -41,6 +55,7 @@ model Bounty {
   refunds  Refund[]
   linkedPullRequests LinkedPullRequest[]
 
+  @@unique([bountyId, chainId, contractAddress])
   @@unique([repoHash, issueNumber, chainId, contractAddress])
 }
 
@@ -51,9 +66,10 @@ model LinkedPullRequest {
   author    String?
   createdAt DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bountyDbId String
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([bountyId, prUrl])
+  @@unique([bountyDbId, prUrl])
 }
 
 model BountyAsset {
@@ -65,9 +81,10 @@ model BountyAsset {
   paid      String @default("0")
   updatedAt DateTime @updatedAt
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bountyDbId String
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([bountyId, token])
+  @@unique([bountyDbId, token])
 }
 
 model Funding {
@@ -82,9 +99,10 @@ model Funding {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bountyDbId String
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, txHash, logIndex])
 }
 
 model Claim {
@@ -98,10 +116,11 @@ model Claim {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bountyDbId String
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([bountyId, claimId])
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, claimId])
+  @@unique([bountyDbId, txHash, logIndex])
 }
 
 model Payout {
@@ -115,9 +134,10 @@ model Payout {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bountyDbId String
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, txHash, logIndex])
 }
 
 model Refund {
@@ -131,9 +151,10 @@ model Refund {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bountyDbId String
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, txHash, logIndex])
 }
 
 model IndexerState {

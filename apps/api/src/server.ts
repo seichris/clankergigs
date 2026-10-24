@@ -1,3 +1,5 @@
+import { createNetworkRegistry, networkWhere, publicNetworks, NetworkError, type NetworkRegistry, type NetworkSelection } from "./networks.js";
+import { loadEnv } from "./env.js";
 import Fastify from "fastify";
 import cors, { type FastifyCorsOptions } from "@fastify/cors";
 import { getPrisma } from "./db.js";
@@ -8,9 +10,14 @@ import { parseGithubIssueUrl, parseGithubPullRequestUrl } from "./github/parse.j
 import { fetchGithubIssueByUrl } from "./github/issue.js";
 import { backfillLinkedPullRequests } from "./github/backfill.js";
 
-export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
+export async function buildServer(opts?: { github?: GithubAuthConfig | null; networks?: NetworkRegistry }) {
   const app = Fastify({ logger: true });
   const prisma = getPrisma();
+  const networks = opts?.networks ?? createNetworkRegistry(loadEnv());
+  app.setErrorHandler((error, _req, reply) => {
+    if (error instanceof NetworkError) return reply.code(error.statusCode).send({ error: error.message });
+    return reply.send(error);
+  });
 
   const webOrigin = process.env.WEB_ORIGIN || "http://localhost:3000";
   const webOrigins = webOrigin
@@ -26,11 +33,14 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
   // Use credentials so the GitHub OAuth session cookie can be sent.
   await app.register(cors, { origin: corsOrigin, credentials: true });
 
+  app.get("/networks", async () => ({ networks: publicNetworks(networks) }));
+
   app.get("/health", async () => ({ ok: true }));
 
   registerGithubOAuthRoutes(app);
 
   registerGithubWebhookRoutes(app, {
+    networks,
     webhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
     github: opts?.github ?? null
   });
@@ -66,6 +76,7 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
 
     const result = await backfillLinkedPullRequests({
       prisma,
+      networks,
       github: opts?.github ?? null,
       repo: typeof body?.repo === "string" ? body.repo : undefined,
       issueUrl: typeof body?.issueUrl === "string" ? body.issueUrl : undefined,
@@ -79,17 +90,16 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
     return reply.code(status).send(result);
   });
 
-  app.get("/bounties", async (req) => {
-    const q = req.query as { repoHash?: string; issueNumber?: string; bountyId?: string };
-    const chainId = Number(process.env.CHAIN_ID || "0");
-    const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
+  app.get("/bounties", async (req, reply) => {
+    const q = req.query as { repoHash?: string; issueNumber?: string; bountyId?: string } & NetworkSelection;
+    const scope = networkWhere(networks, q);
     if (q.bountyId) {
-      const b = await prisma.bounty.findFirst({
+      const matches = await prisma.bounty.findMany({
         where: {
           bountyId: q.bountyId,
-          ...(chainId ? { chainId } : {}),
-          ...(contractAddress ? { contractAddress } : {})
+          ...scope
         },
+        take: 2,
         include: {
           assets: true,
           fundings: true,
@@ -99,12 +109,11 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
           linkedPullRequests: { select: { prUrl: true, author: true, createdAt: true } }
         }
       });
-      return { bounty: b };
+      if (matches.length > 1) return reply.code(409).send({ error: "Ambiguous bountyId: provide chainId and contractAddress" });
+      return { bounty: matches[0] ?? null };
     }
 
-    const where: any = {};
-    if (chainId) where.chainId = chainId;
-    if (contractAddress) where.contractAddress = contractAddress;
+    const where: any = { ...scope };
     if (q.repoHash) where.repoHash = q.repoHash;
     if (q.issueNumber) where.issueNumber = Number(q.issueNumber);
 
@@ -117,14 +126,11 @@ export async function buildServer(opts?: { github?: GithubAuthConfig | null }) {
   });
 
   app.get("/issues", async (req) => {
-    const q = req.query as { q?: string; status?: string; take?: string; include?: string };
-    const chainId = Number(process.env.CHAIN_ID || "0");
-    const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
+    const q = req.query as { q?: string; status?: string; take?: string; include?: string } & NetworkSelection;
+    const scope = networkWhere(networks, q);
     const take = Math.min(Math.max(Number(q.take || "200"), 1), 500);
     const includeGithub = q.include === "github";
-    const where: any = {};
-    if (chainId) where.chainId = chainId;
-    if (contractAddress) where.contractAddress = contractAddress;
+    const where: any = { ...scope };
     if (q.status) where.status = q.status;
 
     const bounties = await prisma.bounty.findMany({

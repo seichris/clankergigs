@@ -1,5 +1,7 @@
 "use client";
 
+import { useNetwork } from "@/components/network-provider";
+import { networkParams } from "@/lib/network";
 import * as React from "react";
 import type { Address, Hex } from "viem";
 import { formatUnits, isAddress, parseEther, parseUnits } from "viem";
@@ -12,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ghBountiesAbi } from "@/lib/abi";
 import { isProbablyEnsName } from "@/lib/ens";
 import { useEnsAddressForName, useEnsPrimaryName } from "@/lib/hooks/useEns";
-import { getConfig, getPublicClient, getWalletClient } from "@/lib/wallet";
+import { ensureWalletChain, getConfig, getPublicClient, getWalletClient } from "@/lib/wallet";
 import { usdcAddressForChainId } from "@gh-bounties/shared";
 
 const ETH_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -57,6 +59,7 @@ export function PayoutDialog({
   onPayouted?: () => void;
   escrowedByToken?: Record<string, string>;
 }) {
+  const { network } = useNetwork();
   const [asset, setAsset] = React.useState<"ETH" | "USDC">("ETH");
   const [recipient, setRecipient] = React.useState("");
   const [amount, setAmount] = React.useState("");
@@ -83,7 +86,7 @@ export function PayoutDialog({
     }
   }, [open]);
 
-  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const chainId = network.chainId;
   const usdcAddress = usdcAddressForChainId(chainId);
 
   const title =
@@ -137,10 +140,11 @@ export function PayoutDialog({
     setError(null);
 
     try {
-      const { contractAddress } = getConfig();
-      const wc = getWalletClient();
+      const { contractAddress } = getConfig(network);
+      await ensureWalletChain(network.chainId, network);
+      const wc = getWalletClient(network);
       const [account] = await wc.getAddresses();
-      const pc = getPublicClient();
+      const pc = getPublicClient(network);
 
       const token = asset === "ETH" ? ETH_ADDRESS : (usdcAddress as Address);
       const decimals = asset === "ETH" ? 18 : 6;
@@ -152,6 +156,7 @@ export function PayoutDialog({
           headers: { "Content-Type": "application/json" },
           credentials: "include",
           body: JSON.stringify({
+            ...networkParams(network),
             bountyId,
             token,
             recipient: resolvedRecipient,

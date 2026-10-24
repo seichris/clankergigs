@@ -1,7 +1,9 @@
 "use client";
 
+import { NetworkSelector, useNetwork } from "@/components/network-provider";
+import { networkQuery } from "@/lib/network";
 import * as React from "react";
-import { ChevronDown, Moon, Sun } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -37,13 +39,6 @@ function addressGradientStyle(addr: string) {
   return {
     backgroundImage: `linear-gradient(135deg, hsl(${a} 70% 55%), hsl(${b} 70% 55%))`,
   } as React.CSSProperties;
-}
-
-function chainLabel(chainId: number) {
-  if (chainId === 1) return "Ethereum";
-  if (chainId === 11155111) return "Sepolia";
-  if (chainId === 31337) return "Local";
-  return `Chain ${chainId}`;
 }
 
 function errorMessage(err: unknown) {
@@ -213,9 +208,8 @@ function localhostExampleIssue(chainId: number): IssueRow {
 
 export default function Home() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8787";
-  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
-  const mainnetWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_MAINNET || "").trim();
-  const sepoliaWebOrigin = (process.env.NEXT_PUBLIC_WEB_ORIGIN_ETHEREUM_SEPOLIA || "").trim();
+  const { network } = useNetwork();
+  const chainId = network.chainId;
   const { address, hasProvider, connect } = useWallet();
   const { user, login, logout } = useGithubUser(apiUrl);
   const { theme, setTheme, mounted } = useTheme();
@@ -237,14 +231,14 @@ export default function Home() {
   const displayedIssues = React.useMemo(() => {
     if (!isLocalhost()) return issues;
     if (issues.length > 0) return issues;
-    return [localhostExampleIssue(chainId)];
-  }, [issues, chainId]);
+    return [{ ...localhostExampleIssue(chainId), contractAddress: network.contractAddress }];
+  }, [issues, chainId, network.contractAddress]);
 
   const fetchIssues = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${apiUrl}/issues?include=github`, { credentials: "include" });
+      const res = await fetch(`${apiUrl}/issues?include=github&${networkQuery(network)}`, { credentials: "include" });
       if (!res.ok) throw new Error(`Failed to load issues (${res.status})`);
       const json = (await res.json()) as { issues?: IssueRow[] };
       setIssues(json?.issues ?? []);
@@ -253,7 +247,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [apiUrl]);
+  }, [apiUrl, network]);
 
   React.useEffect(() => {
     fetchIssues().catch(() => {
@@ -355,17 +349,6 @@ export default function Home() {
     return record.toLowerCase() === user.login.toLowerCase();
   }, [address, user, ensGithub]);
 
-  const hasNetworkSwitch = Boolean(mainnetWebOrigin || sepoliaWebOrigin);
-
-  const switchNetwork = React.useCallback(
-    (targetOrigin: string, preservePath = true) => {
-      const origin = targetOrigin.replace(/\/+$/, "");
-      const path = preservePath ? `${window.location.pathname}${window.location.search}${window.location.hash}` : "";
-      window.location.href = `${origin}${path}`;
-    },
-    []
-  );
-
   return (
     <main className="min-h-screen">
       <div className="mx-auto flex w-full flex-col gap-8 px-6 py-6">
@@ -391,32 +374,7 @@ export default function Home() {
 		            </div>
 		          </div>
           <div className="flex items-center gap-3">
-            {hasNetworkSwitch ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline">
-                    {chainLabel(chainId)}
-                    <ChevronDown className="ml-2 h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {mainnetWebOrigin ? (
-                    <DropdownMenuItem disabled={chainId === 1} onClick={() => switchNetwork(mainnetWebOrigin)}>
-                      {chainLabel(1)}
-                    </DropdownMenuItem>
-                  ) : null}
-                  {sepoliaWebOrigin ? (
-                    <DropdownMenuItem disabled={chainId === 11155111} onClick={() => switchNetwork(sepoliaWebOrigin)}>
-                      {chainLabel(11155111)}
-                    </DropdownMenuItem>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : (
-              <Badge variant="outline" title="Configured by NEXT_PUBLIC_CHAIN_ID">
-                {chainLabel(chainId)}
-              </Badge>
-            )}
+            <NetworkSelector />
             {!address ? (
               <Button
                 variant="outline"

@@ -1,3 +1,4 @@
+import { networkWhere, type NetworkRegistry } from "../networks.js";
 import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { getPrisma } from "../db.js";
@@ -59,7 +60,7 @@ function extractIssueReferences(text: string, defaultOwner: string, defaultRepo:
 
 export function registerGithubWebhookRoutes(
   app: FastifyInstance,
-  opts: { webhookSecret?: string; github?: GithubAuthConfig | null }
+  opts: { networks: NetworkRegistry; webhookSecret?: string; github?: GithubAuthConfig | null }
 ) {
   // IMPORTANT: We need the raw payload (required for signature verification) for *this* route only.
   // Content-type parsers are scoped to the Fastify plugin instance they are registered on, so
@@ -108,20 +109,18 @@ export function registerGithubWebhookRoutes(
         }
 
         const prisma = getPrisma();
-        const chainId = Number(process.env.CHAIN_ID || "0");
-        const contractAddress = (process.env.CONTRACT_ADDRESS || "").toLowerCase();
 
-        const bountyMatches: Array<{ issueUrl: string; bountyId: string }> = [];
+
+        const bountyMatches: Array<{ issueUrl: string; bountyId: string; bountyDbId: string }> = [];
         for (const issueUrl of issueUrls) {
           const alt = issueUrl.replace(/^https?:\/\//, "");
-          const bounty = await prisma.bounty.findFirst({
+          const bounties = await prisma.bounty.findMany({
             where: {
               metadataURI: { in: [issueUrl, alt] },
-              ...(chainId ? { chainId } : {}),
-              ...(contractAddress ? { contractAddress } : {})
+              ...networkWhere(opts.networks)
             }
           });
-          if (bounty) bountyMatches.push({ issueUrl, bountyId: bounty.bountyId });
+          for (const bounty of bounties) bountyMatches.push({ issueUrl, bountyId: bounty.bountyId, bountyDbId: bounty.id });
         }
 
         if (bountyMatches.length === 0) {
@@ -130,14 +129,14 @@ export function registerGithubWebhookRoutes(
 
         const commentBody = buildPrClaimReminderComment({
           author,
-          issueUrls: bountyMatches.map((match) => match.issueUrl)
+          issueUrls: [...new Set(bountyMatches.map((match) => match.issueUrl))]
         });
 
         try {
           for (const match of bountyMatches) {
             await prisma.linkedPullRequest.upsert({
-              where: { bountyId_prUrl: { bountyId: match.bountyId, prUrl } },
-              create: { bountyId: match.bountyId, prUrl, author: author ?? null },
+              where: { bountyDbId_prUrl: { bountyDbId: match.bountyDbId, prUrl } },
+              create: { bountyDbId: match.bountyDbId, bountyId: match.bountyId, prUrl, author: author ?? null },
               update: { author: author ?? null }
             });
           }
