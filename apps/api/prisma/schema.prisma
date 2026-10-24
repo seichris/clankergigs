@@ -15,12 +15,27 @@ model Repo {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  bounties Bounty[]
+  bounties    Bounty[]
+  deployments RepoDeployment[]
+}
+
+// Repo is the GitHub identity. Maintainer authority belongs to each deployment.
+model RepoDeployment {
+  id                String   @id @default(cuid())
+  repoHash          String
+  chainId           Int
+  contractAddress   String
+  maintainerAddress String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  repo              Repo     @relation(fields: [repoHash], references: [repoHash])
+
+  @@unique([repoHash, chainId, contractAddress])
 }
 
 model Bounty {
-  id          String   @id @default(cuid())
-  bountyId    String   @unique
+  id          String @id @default(cuid())
+  bountyId    String
   repoHash    String
   issueNumber Int
   metadataURI String
@@ -34,44 +49,50 @@ model Bounty {
 
   repo Repo @relation(fields: [repoHash], references: [repoHash])
 
-  assets   BountyAsset[]
-  fundings Funding[]
-  claims   Claim[]
-  payouts  Payout[]
-  refunds  Refund[]
+  assets             BountyAsset[]
+  fundings           Funding[]
+  claims             Claim[]
+  payouts            Payout[]
+  refunds            Refund[]
   linkedPullRequests LinkedPullRequest[]
 
   @@unique([repoHash, issueNumber, chainId, contractAddress])
+  @@unique([bountyId, chainId, contractAddress])
 }
 
 model LinkedPullRequest {
-  id        String   @id @default(cuid())
-  bountyId  String
-  prUrl     String
-  author    String?
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  bountyDbId String
+  bountyId   String
+  prUrl      String
+  author     String?
+  createdAt  DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([bountyId, prUrl])
+  @@unique([bountyDbId, prUrl])
+  @@index([bountyDbId])
 }
 
 model BountyAsset {
-  id        String @id @default(cuid())
-  bountyId  String
-  token     String // 0x... or 0x000... for ETH
-  escrowed  String @default("0")
-  funded    String @default("0")
-  paid      String @default("0")
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(cuid())
+  bountyDbId String
+  bountyId   String
+  token      String // 0x... or 0x000... for ETH
+  escrowed   String   @default("0")
+  funded     String   @default("0")
+  paid       String   @default("0")
+  updatedAt  DateTime @updatedAt
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([bountyId, token])
+  @@unique([bountyDbId, token])
+  @@index([bountyDbId])
 }
 
 model Funding {
   id          String   @id @default(cuid())
+  bountyDbId  String
   bountyId    String
   token       String
   funder      String
@@ -82,13 +103,15 @@ model Funding {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, txHash, logIndex])
+  @@index([bountyDbId])
 }
 
 model Claim {
   id          String   @id @default(cuid())
+  bountyDbId  String
   bountyId    String
   claimId     Int
   claimer     String
@@ -98,14 +121,16 @@ model Claim {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([bountyId, claimId])
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, claimId])
+  @@unique([bountyDbId, txHash, logIndex])
+  @@index([bountyDbId])
 }
 
 model Payout {
   id          String   @id @default(cuid())
+  bountyDbId  String
   bountyId    String
   token       String
   recipient   String
@@ -115,13 +140,15 @@ model Payout {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, txHash, logIndex])
+  @@index([bountyDbId])
 }
 
 model Refund {
   id          String   @id @default(cuid())
+  bountyDbId  String
   bountyId    String
   token       String
   funder      String
@@ -131,9 +158,10 @@ model Refund {
   blockNumber Int
   createdAt   DateTime @default(now())
 
-  bounty Bounty @relation(fields: [bountyId], references: [bountyId])
+  bounty Bounty @relation(fields: [bountyDbId], references: [id])
 
-  @@unique([txHash, logIndex])
+  @@unique([bountyDbId, txHash, logIndex])
+  @@index([bountyDbId])
 }
 
 model IndexerState {
@@ -159,30 +187,30 @@ model GithubSession {
 }
 
 model ApiSession {
-  id                  String   @id @default(cuid())
-  tokenHash           String   @unique
+  id                   String   @id @default(cuid())
+  tokenHash            String   @unique
   githubAccessTokenEnc String
-  userLogin           String
-  userId              Int
-  userAvatarUrl       String?
-  label               String?
-  createdAt           DateTime @default(now())
-  expiresAt           DateTime
+  userLogin            String
+  userId               Int
+  userAvatarUrl        String?
+  label                String?
+  createdAt            DateTime @default(now())
+  expiresAt            DateTime
 
   @@index([expiresAt])
   @@index([userLogin])
 }
 
 model GithubDeviceAuth {
-  id             String   @id @default(cuid())
-  deviceCodeHash String   @unique
-  userCode       String
+  id              String   @id @default(cuid())
+  deviceCodeHash  String   @unique
+  userCode        String
   verificationUri String
-  interval       Int
-  scope          String?
-  label          String?
-  createdAt      DateTime @default(now())
-  expiresAt      DateTime
+  interval        Int
+  scope           String?
+  label           String?
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
 
   @@index([expiresAt])
 }
