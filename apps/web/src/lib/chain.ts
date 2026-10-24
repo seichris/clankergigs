@@ -1,4 +1,5 @@
 import { defineChain } from "viem";
+import { mainnet, sepolia } from "viem/chains";
 
 function sanitizeRpcUrl(input: string) {
   let url = input.trim();
@@ -43,10 +44,24 @@ function firstRpcUrls(...values: Array<string | undefined>) {
   return [];
 }
 
-export function appChain() {
-  const id = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+export function appChain(id: number) {
+  // Only explicitly public browser RPCs belong here. Never expose NETWORKS_JSON.
+  const legacyId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const legacyRpc = id === legacyId ? process.env.NEXT_PUBLIC_RPC_URL : undefined;
+  const raw = process.env.NEXT_PUBLIC_NETWORK_RPC_URLS_JSON;
+  if (raw) {
+    const entries = JSON.parse(raw) as Record<string, unknown>;
+    const configured = entries[String(id)];
+    if (configured !== undefined) {
+      if (!Array.isArray(configured) || !configured.length || configured.some(url => typeof url !== "string" || !/^https?:\/\//i.test(url))) {
+        throw new Error(`Invalid public RPC configuration for chain ${id}`);
+      }
+      return defineChain({ id, name: `Chain ${id}`, nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+        rpcUrls: { default: { http: configured as string[] } } });
+    }
+  }
   if (id === 31337) {
-    const rpcUrls = firstRpcUrls(process.env.NEXT_PUBLIC_RPC_URL);
+    const rpcUrls = firstRpcUrls(legacyRpc);
     return defineChain({
       id: 31337,
       name: "Anvil",
@@ -61,13 +76,13 @@ export function appChain() {
     const rpcUrls = firstRpcUrls(
       process.env.NEXT_PUBLIC_RPC_URLS_ETHEREUM_SEPOLIA,
       process.env.NEXT_PUBLIC_RPC_URL_ETHEREUM_SEPOLIA,
-      process.env.NEXT_PUBLIC_RPC_URL
+      legacyRpc
     );
     return defineChain({
       id: 11155111,
       name: "Sepolia",
       nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-      rpcUrls: { default: { http: rpcUrls.length ? rpcUrls : [""] } }
+      rpcUrls: { default: { http: rpcUrls.length ? rpcUrls : [...sepolia.rpcUrls.default.http] } }
     });
   }
 
@@ -75,18 +90,18 @@ export function appChain() {
     const rpcUrls = firstRpcUrls(
       process.env.NEXT_PUBLIC_RPC_URLS_ETHEREUM_MAINNET,
       process.env.NEXT_PUBLIC_RPC_URL_ETHEREUM_MAINNET,
-      process.env.NEXT_PUBLIC_RPC_URL
+      legacyRpc
     );
     return defineChain({
       id: 1,
       name: "Ethereum",
       nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-      rpcUrls: { default: { http: rpcUrls.length ? rpcUrls : [""] } }
+      rpcUrls: { default: { http: rpcUrls.length ? rpcUrls : [...mainnet.rpcUrls.default.http] } }
     });
   }
 
   // Fallback: user must add their chain to wallet; this is for viem typing.
-  const rpcUrls = firstRpcUrls(process.env.NEXT_PUBLIC_RPC_URL);
+  const rpcUrls = firstRpcUrls(legacyRpc);
   return defineChain({
     id,
     name: `Chain ${id}`,
