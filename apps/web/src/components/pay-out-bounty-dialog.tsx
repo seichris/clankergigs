@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useNetwork } from "@/components/network-provider";
 import type { Address, Hex } from "viem";
 import { formatUnits, isAddress, parseEther, parseUnits } from "viem";
 
@@ -64,7 +65,8 @@ export function PayOutBountyDialog({
   isFunder: boolean;
   onPayouted?: () => void;
 }) {
-  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const { network } = useNetwork();
+  const chainId = (network?.chainId ?? 0);
   const usdcAddress = usdcAddressForChainId(chainId);
 
   const [mode, setMode] = React.useState<Mode>("repo");
@@ -118,16 +120,15 @@ export function PayOutBountyDialog({
 
   React.useEffect(() => {
     if (!open) return;
-    if (!bountyId) return;
+    if (!bountyId || !network) return;
 
     let active = true;
-    const { contractAddress } = getConfig();
-    const pc = getPublicClient();
-
     const tokens = [ETH_ADDRESS.toLowerCase(), usdcAddress?.toLowerCase()].filter(Boolean) as string[];
 
     (async () => {
       try {
+        const { contractAddress } = getConfig(network);
+        const pc = getPublicClient(network);
         const totals = await Promise.all(
           tokens.map(async (t) => {
             const res = (await pc.readContract({
@@ -151,6 +152,8 @@ export function PayOutBountyDialog({
 
       if (!walletAddress) return;
       try {
+        const { contractAddress } = getConfig(network);
+        const pc = getPublicClient(network);
         const contributions = await Promise.all(
           tokens.map(async (t) => {
             const res = (await pc.readContract({
@@ -175,7 +178,7 @@ export function PayOutBountyDialog({
     return () => {
       active = false;
     };
-  }, [open, bountyId, walletAddress, usdcAddress]);
+  }, [open, bountyId, walletAddress, usdcAddress, network]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -204,17 +207,18 @@ export function PayOutBountyDialog({
 
   async function submitRepoPayout(opts: { token: Address; amountWei: bigint }) {
     if (!bountyId) throw new Error("Missing bounty id.");
-    const { contractAddress } = getConfig();
+    const { contractAddress } = getConfig(network);
     await ensureWalletChain(chainId);
-    const wc = getWalletClient();
+    const wc = getWalletClient(network);
     const [account] = await wc.getAddresses();
-    const pc = getPublicClient();
+    const pc = getPublicClient(network);
 
     const authRes = await fetch(`${apiUrl}/payout-auth`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify({
+          ...network,
         bountyId,
         token: opts.token,
         recipient: recipient.trim(),
@@ -290,11 +294,11 @@ export function PayOutBountyDialog({
     setError(null);
 
     try {
-      const { contractAddress } = getConfig();
+      const { contractAddress } = getConfig(network);
       await ensureWalletChain(chainId);
-      const wc = getWalletClient();
+      const wc = getWalletClient(network);
       const [account] = await wc.getAddresses();
-      const pc = getPublicClient();
+      const pc = getPublicClient(network);
 
       if (mode === "repo") {
         let didSubmit = false;

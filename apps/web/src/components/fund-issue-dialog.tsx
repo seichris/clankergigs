@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useNetwork } from "@/components/network-provider";
 import { formatUnits, isAddress, parseEther, parseUnits, type Address } from "viem";
 import { bountyId as computeBountyId, repoHash as computeRepoHash, usdcAddressForChainId } from "@gh-bounties/shared";
 
@@ -34,6 +35,7 @@ export function FundIssueDialog({
   defaultIssueUrl?: string | null;
   onFunded?: () => void;
 }) {
+  const { network } = useNetwork();
   const [issueUrl, setIssueUrl] = React.useState(defaultIssueUrl || "");
   const [asset, setAsset] = React.useState<"ETH" | "USDC">("ETH");
   const [lockDays, setLockDays] = React.useState("7");
@@ -48,7 +50,7 @@ export function FundIssueDialog({
     }
   }, [open, defaultIssueUrl]);
 
-  const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337");
+  const chainId = (network?.chainId ?? 0);
   const usdcAddress = usdcAddressForChainId(chainId);
 
   const derived = React.useMemo<DerivedIssue | null>(() => {
@@ -70,7 +72,7 @@ export function FundIssueDialog({
 
   const lockDaysValue = Number.isFinite(Number(lockDays)) ? Number(lockDays) : 0;
   const amountValue = Number(amount);
-  const canSubmit = Boolean(
+  const canSubmit = Boolean(network &&
     walletAddress &&
       derived &&
       amountValue > 0 &&
@@ -79,10 +81,10 @@ export function FundIssueDialog({
 
   async function ensureBountyExists() {
     if (!derived) throw new Error("Invalid issue URL");
-    const { contractAddress } = getConfig();
+    const { contractAddress } = getConfig(network);
     await ensureWalletChain(chainId);
-    const pc = getPublicClient();
-    const wc = getWalletClient();
+    const pc = getPublicClient(network);
+    const wc = getWalletClient(network);
 
     const bounty = (await pc.readContract({
       address: contractAddress,
@@ -124,11 +126,11 @@ export function FundIssueDialog({
     setError(null);
 
     try {
-      const { contractAddress } = getConfig();
+      const { contractAddress } = getConfig(network);
       await ensureWalletChain(chainId);
-      const wc = getWalletClient();
+      const wc = getWalletClient(network);
       const [account] = await wc.getAddresses();
-      const pc = getPublicClient();
+      const pc = getPublicClient(network);
 
       await ensureBountyExists();
 

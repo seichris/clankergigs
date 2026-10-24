@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useNetwork } from "@/components/network-provider";
 import type { Hex, Address } from "viem";
 
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -32,6 +33,7 @@ export function ClaimBountyDialog({
   onGithubLogin: () => void;
   onClaimed?: () => void;
 }) {
+  const { network } = useNetwork();
   const [prUrl, setPrUrl] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
@@ -43,7 +45,7 @@ export function ClaimBountyDialog({
     }
   }, [open]);
 
-  const canSubmit = Boolean(walletAddress && bountyId && prUrl.trim().length > 0 && githubUser);
+  const canSubmit = Boolean(network && walletAddress && bountyId && prUrl.trim().length > 0 && githubUser);
 
   async function submit() {
     if (!walletAddress) return;
@@ -74,6 +76,7 @@ export function ClaimBountyDialog({
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
+          ...network,
           bountyId,
           claimMetadataURI: url,
           claimer: walletAddress,
@@ -88,11 +91,11 @@ export function ClaimBountyDialog({
       const deadline = BigInt(auth.deadline);
       const signature = auth.signature as `0x${string}`;
 
-      const { contractAddress } = getConfig();
-      await ensureWalletChain(Number(process.env.NEXT_PUBLIC_CHAIN_ID || "31337"));
-      const wc = getWalletClient();
+      const { contractAddress } = getConfig(network);
+      await ensureWalletChain((network?.chainId ?? 0));
+      const wc = getWalletClient(network);
       const [account] = await wc.getAddresses();
-      const pc = getPublicClient();
+      const pc = getPublicClient(network);
 
       const hash = await wc.writeContract({
         address: contractAddress,
